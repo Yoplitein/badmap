@@ -190,14 +190,16 @@ public class BadMap implements DedicatedServerModInitializer
 			}
 			
 			if(ChunkSerializer.getChunkType(chunkNBT) != ChunkType.LEVELCHUNK) chunkNBT = null;
+			
 			visited.put(coord, chunkNBT);
 			if(chunkNBT == null) continue;
 			
 			for(int dx = -searchRadius; dx < searchRadius + 1; dx++)
 				for(int dz = -searchRadius; dz < searchRadius + 1; dz++)
 				{
-					if(dx == 0 && dz == 0) continue;
-					queue.add(new ChunkPos(coord.x + dx, coord.z + dz));
+					final var otherCoord = new ChunkPos(coord.x + dx, coord.z + dz);
+					if(dx == 0 && dz == 0 || visited.containsKey(otherCoord)) continue;
+					queue.add(otherCoord);
 				}
 		}
 		
