@@ -12,6 +12,7 @@ import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import javax.imageio.ImageIO;
 
@@ -24,6 +25,7 @@ import org.apache.logging.log4j.Logger;
 import io.netty.util.internal.IntegerHolder;
 import net.fabricmc.api.DedicatedServerModInitializer;
 import net.fabricmc.fabric.api.command.v1.CommandRegistrationCallback;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.minecraft.block.MapColor;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.server.command.ServerCommandSource;
@@ -58,6 +60,26 @@ public class BadMap implements DedicatedServerModInitializer
 							.executes(BadMap::cmdRender)
 					)
 			);
+		});
+		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+			LOGGER.info("shutting down render worker pool");
+			THREADPOOL.shutdown();
+		});
+		ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
+			if(THREADPOOL.isTerminated()) return;
+			
+			LOGGER.warn("waiting for render pool to terminate");
+			try
+			{
+				if(THREADPOOL.awaitTermination(10, TimeUnit.SECONDS)) return;
+			}
+			catch(Exception err)
+			{
+				LOGGER.error("awaitTermination interrupted", err);
+			}
+			
+			final var dropped = THREADPOOL.shutdownNow();
+			LOGGER.error("render pool did not terminate after 10 seconds, forcefully shutdown with {} tasks remaining", dropped.size());
 		});
 	}
 	
