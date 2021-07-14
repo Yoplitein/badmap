@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "id": "badmap",
+  "version": "${version}",
+
+  "name": "Bad Map",
+  "description": "Renders crappy 2d maps",
+  "authors": [
+    "Yoplitein"
+  ],
+  "contact": {
+    "homepage": "",
+    "sources": ""
+  },
+
+  "license": "",
+  "icon": "",
+
+  "environment": "*",
+  "entrypoints": {
+    "server": [
+      "net.yoplitein.badmap.BadMap"
+    ]
+  },
+  "mixins": [
+    "badmap.mixins.json"
+  ],
+
+  "depends": {
+    "fabricloader": ">=0.11.3",
+    "fabric": "*",
+    "minecraft": "1.17.x",
+    "java": ">=16"
+  },
+  "suggests": {
+    "another-mod": "*"
+  }
+}
