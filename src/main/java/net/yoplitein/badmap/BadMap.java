@@ -30,6 +30,7 @@ import net.minecraft.block.MapColor;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.world.ChunkTicketType;
+import net.minecraft.server.world.ServerChunkManager;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkPos;
@@ -89,7 +90,7 @@ public class BadMap implements DedicatedServerModInitializer
 			final var world = ctx.getSource().getMinecraftServer().getOverworld();
 			
 			final var start = System.currentTimeMillis();
-			final var chunks = discoverChunks(world, Arrays.asList(world.getSpawnPos()));
+			final var chunks = discoverChunks(world.getChunkManager(), Arrays.asList(world.getSpawnPos()));
 			final var end = System.currentTimeMillis();
 			LOGGER.info("found {} chunks in {} ms", chunks.size(), end - start);
 		});
@@ -109,7 +110,7 @@ public class BadMap implements DedicatedServerModInitializer
 		
 		THREADPOOL.execute(() -> {
 			final var start = System.currentTimeMillis(); // FIXME: debugging
-			final var chunks = discoverChunks(world, Arrays.asList(world.getSpawnPos()));
+			final var chunks = discoverChunks(chunkManager, Arrays.asList(world.getSpawnPos()));
 			final var totalChunks = chunks.size();
 			final var chunksWritten = new IntegerHolder();
 			chunksWritten.value = 0;
@@ -164,10 +165,10 @@ public class BadMap implements DedicatedServerModInitializer
 		;
 	}
 	
-	private static Set<ChunkPos> discoverChunks(ServerWorld world, List<BlockPos> seeds)
+	private static Set<ChunkPos> discoverChunks(ServerChunkManager chunkManager, List<BlockPos> seeds)
 	{
 		final var searchRadius = 4;
-		final var anvil = world.getChunkManager().threadedAnvilChunkStorage;
+		final var anvil = chunkManager.threadedAnvilChunkStorage;
 		final var visited = new HashMap<ChunkPos, NbtCompound>();
 		final var queue = new LinkedList<ChunkPos>();
 		ChunkPos coord;
