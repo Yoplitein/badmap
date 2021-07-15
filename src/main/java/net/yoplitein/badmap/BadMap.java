@@ -13,6 +13,7 @@ import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import javax.imageio.ImageIO;
 
@@ -22,10 +23,10 @@ import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import io.netty.util.internal.IntegerHolder;
 import net.fabricmc.api.DedicatedServerModInitializer;
 import net.fabricmc.fabric.api.command.v1.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.block.MapColor;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.server.command.ServerCommandSource;
@@ -82,6 +83,14 @@ public class BadMap implements DedicatedServerModInitializer
 			final var dropped = THREADPOOL.shutdownNow();
 			LOGGER.error("render pool did not terminate after 10 seconds, forcefully shutdown with {} tasks remaining", dropped.size());
 		});
+		
+		// FIXME: debugging
+		ServerTickEvents.START_SERVER_TICK.register(server -> {
+			LOGGER.trace("server tick start");
+		});
+		ServerTickEvents.END_SERVER_TICK.register(server -> {
+			LOGGER.trace("server tick end");
+		});
 	}
 	
 	private static int cmdTest(CommandContext<ServerCommandSource> ctx) throws CommandSyntaxException
@@ -112,22 +121,22 @@ public class BadMap implements DedicatedServerModInitializer
 			final var start = System.currentTimeMillis(); // FIXME: debugging
 			final var chunks = discoverChunks(chunkManager, Arrays.asList(world.getSpawnPos()));
 			final var totalChunks = chunks.size();
-			final var chunksWritten = new IntegerHolder();
-			chunksWritten.value = 0;
+			final var chunksWritten = new AtomicInteger();
+			chunksWritten.set(0);
 			
-			chunks.forEach(coord -> {
-				chunkManager.addTicket(ChunkTicketType.FORCED, coord, 0, coord);
-				// FIXME: need to wait for chunk manager to tick here
-				final var chunk = world.getChunk(coord.x, coord.z);
-				final var img = renderChunk(world, chunk);
-				chunkManager.removeTicket(ChunkTicketType.FORCED, coord, 0, coord);
+			chunks.forEach(coord -> THREADPOOL.execute(() -> {
+				server.submit(() -> chunkManager.addTicket(ChunkTicketType.FORCED, coord, 0, coord)).join();
+				final var chunk = server.submit(() -> world.getChunk(coord.x, coord.z)).join(); // intentionally wait for next tick, should be loaded now
 				
+				final var img = renderChunk(world, chunk);
 				final var outFile = tileDir.resolve(tileFilename(coord)).toFile();
 				writePNG(outFile, img);
 				
-				chunksWritten.value++;
-				if(chunksWritten.value % 10 == 0) LOGGER.info("wrote {} / {} chunks", chunksWritten.value, totalChunks);
-			});
+				final var nchunks = chunksWritten.incrementAndGet();
+				if(nchunks % 10 == 0) LOGGER.info("wrote {} / {} chunks", nchunks, totalChunks);
+				
+				server.submit(() -> chunkManager.removeTicket(ChunkTicketType.FORCED, coord, 0, coord));
+			}));
 			
 			final var end = System.currentTimeMillis(); // FIXME: debugging
 			LOGGER.info("wrote test tiles in {} ms", end - start);
