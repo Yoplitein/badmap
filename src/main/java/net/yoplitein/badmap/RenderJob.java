@@ -2,13 +2,16 @@ package net.yoplitein.badmap;
 
 import java.awt.image.BufferedImage;
 import java.io.File;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Random;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import javax.imageio.ImageIO;
 
@@ -48,27 +51,18 @@ public class RenderJob
 		
 		BadMap.THREADPOOL.execute(() -> {
 			final var start = System.currentTimeMillis(); // FIXME: debugging
-			final var chunks = discoverChunks(Arrays.asList(world.getSpawnPos()));
-			final var totalChunks = chunks.size();
-			final var chunksWritten = new AtomicInteger();
-			chunksWritten.set(0);
+			final var populated = discoverChunks(Arrays.asList(world.getSpawnPos()));
+			final var regions = groupRegions(populated);
 			
-			chunks.forEach(coord -> BadMap.THREADPOOL.execute(() -> {
-				server.submit(() -> chunkManager.addTicket(ChunkTicketType.FORCED, coord, 0, coord)).join();
-				final var chunk = server.submit(() -> world.getChunk(coord.x, coord.z)).join(); // intentionally wait for next tick, should be loaded now
-				
-				final var img = renderChunk(chunk);
-				final var outFile = tileDir.resolve(tileFilename(coord)).toFile();
+			for(var set: regions)
+			{
+				final var img = renderRegion(set);
+				final var outFile = tileDir.resolve(tileFilename(set.pos)).toFile();
 				writePNG(outFile, img);
-				
-				final var nchunks = chunksWritten.incrementAndGet();
-				if(nchunks % 10 == 0) BadMap.LOGGER.info("wrote {} / {} chunks", nchunks, totalChunks);
-				
-				server.submit(() -> chunkManager.removeTicket(ChunkTicketType.FORCED, coord, 0, coord));
-			}));
+			}
 			
-			final var end = System.currentTimeMillis(); // FIXME: debugging
-			BadMap.LOGGER.info("wrote test tiles in {} ms", end - start);
+			final var end = System.currentTimeMillis();
+			BadMap.LOGGER.info("rendered {} regions in {} ms", regions.size(), end - start);
 		});
 	}
 	
@@ -115,14 +109,84 @@ public class RenderJob
 		return visited.keySet();
 	}
 	
-	private BufferedImage renderChunk(Chunk chunk)
+	private List<RegionSet> groupRegions(Collection<ChunkPos> populated)
+	{
+		final var regions = new HashMap<RegionPos, List<ChunkPos>>();
+		
+		for(var pos: populated)
+		{
+			final var regionPos = RegionPos.of(pos);
+			var list = regions.get(regionPos);
+			
+			if(list == null)
+			{
+				list = new ArrayList<>();
+				regions.put(regionPos, list);
+			}
+			
+			list.add(pos);
+		}
+		
+		return regions
+			.entrySet()
+			.stream()
+			.map(entry -> new RegionSet(entry.getKey(), entry.getValue()))
+			.collect(Collectors.toList())
+		;
+	}
+	
+	private BufferedImage renderRegion(RegionSet set)
+	{
+		final var regionPos = set.pos;
+		final var populated = set.populatedChunks;
+		final var img = new BufferedImage(512, 512, BufferedImage.TYPE_4BYTE_ABGR);
+		
+		// FIXME
+		server.submit(() -> {
+			BadMap.LOGGER.info("force loading chunks");
+			for(var chunk: populated)
+				chunkManager.addTicket(ChunkTicketType.FORCED, chunk, 0, chunk);
+		}).join();
+		BadMap.LOGGER.info("forceload done");
+		final var chunks = server.submit(() -> {
+			BadMap.LOGGER.info("getting chunks");
+			// intentionally wait for next tick, all should be loaded now
+			return populated
+				.stream()
+				.map(pos -> world.getChunk(pos.x, pos.z))
+			;
+		}).join();
+		BadMap.LOGGER.info("get done");
+		// final var chunk = server.submit(() -> world.getChunk(coord.x, coord.z)).join();
+		
+		final var start = System.currentTimeMillis();
+		// TODO: parallelism
+		chunks.forEach(chunk -> renderChunk(img, regionPos, chunk));
+		final var end = System.currentTimeMillis();
+		BadMap.LOGGER.info("rendered region in {} ms", end - start);
+		
+		server.submit(() -> {
+			for(var chunk: populated)
+				chunkManager.removeTicket(ChunkTicketType.FORCED, chunk, 0, chunk);
+		});
+		
+		return img;
+	}
+	
+	private void renderChunk(BufferedImage regionImage, RegionPos regionPos, Chunk chunk)
 	{
 		final var chunkPos = chunk.getPos();
 		final var heightmap = chunk.getHeightmap(Heightmap.Type.WORLD_SURFACE);
 		final var random = new Random(chunkPos.x + chunkPos.z);
-		final var blockPos = new BlockPos.Mutable();
-		final var img = new BufferedImage(16, 16, BufferedImage.TYPE_4BYTE_ABGR);
 		
+		// FIXME: this is all probably wrong
+		final var posInRegion = new ChunkPos(chunkPos.x - 32 * regionPos.x, chunkPos.z - 32 * regionPos.z);
+		final var offsetX = 16 * (posInRegion.x < 0 ? (32 - Math.abs(posInRegion.x)) : posInRegion.x);
+		final var offsetZ = 16 * (posInRegion.z < 0 ? (32 - Math.abs(posInRegion.z)) : posInRegion.z);
+		
+		BadMap.LOGGER.info("rendering chunk {} (region {}, in region {}) with offset {},{}", chunkPos, regionPos, posInRegion, offsetX, offsetZ);
+		
+		final var blockPos = new BlockPos.Mutable();
 		for(int x = 0; x < 16; x++)
 			for(int z = 0; z < 16; z++)
 			{
@@ -167,13 +231,11 @@ public class RenderJob
 				else
 					shade = random.nextInt(3);
 				
-				img.setRGB(x, z, color == MapColor.CLEAR ? 0 : getARGB(color, shade));
+				regionImage.setRGB(offsetX + x, offsetZ + z, color == MapColor.CLEAR ? 0 : getARGB(color, shade));
 			}
-		
-		return img;
 	}
 	
-	private static String tileFilename(ChunkPos pos)
+	private static String tileFilename(RegionPos pos)
 	{
 		return String.format("%d_%d.png", pos.x, pos.z);
 	}
@@ -201,4 +263,14 @@ public class RenderJob
 			(val & 0x0000FF) << 16
 		;
 	}
+	
+	static record RegionPos(int x, int z)
+	{
+		static RegionPos of(ChunkPos pos)
+		{
+			return new RegionPos(pos.x >> 5, pos.z >> 5);
+		}
+	}
+	
+	static record RegionSet(RegionPos pos, List<ChunkPos> populatedChunks) {}
 }
