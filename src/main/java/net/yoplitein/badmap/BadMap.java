@@ -5,6 +5,8 @@ import static net.minecraft.server.command.CommandManager.literal;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
@@ -62,17 +64,28 @@ public class BadMap implements DedicatedServerModInitializer
 		});
 		
 		// FIXME: debugging
-		ServerTickEvents.START_SERVER_TICK.register(server -> {
+		final var tickCounter = new AtomicInteger(0);
+		final var lastTps = new AtomicLong(System.currentTimeMillis());
+		/* ServerTickEvents.START_SERVER_TICK.register(server -> {
 			LOGGER.trace("server tick start");
-		});
+		}); */
 		ServerTickEvents.END_SERVER_TICK.register(server -> {
-			LOGGER.trace("server tick end");
+			// LOGGER.trace("server tick end");
+			final var now = System.currentTimeMillis();
+			final var ticks = tickCounter.incrementAndGet();
+			
+			if(now - lastTps.get() >= 3000)
+			{
+				lastTps.set(now);
+				tickCounter.set(0);
+				LOGGER.debug("server running at {} tps", ticks / 3);
+			}
 		});
 	}
 	
 	private static int cmdTest(CommandContext<ServerCommandSource> ctx) throws CommandSyntaxException
 	{
-		THREADPOOL.execute(() -> {
+		/* THREADPOOL.execute(() -> {
 			final var server = ctx.getSource().getMinecraftServer();
 			final var world = server.getOverworld();
 			final var job = new RenderJob(null, server);
@@ -81,7 +94,7 @@ public class BadMap implements DedicatedServerModInitializer
 			final var chunks = job.discoverChunks(Arrays.asList(world.getSpawnPos()));
 			final var end = System.currentTimeMillis();
 			LOGGER.info("found {} chunks in {} ms", chunks.size(), end - start);
-		});
+		}); */
 		
 		return 1;
 	}
