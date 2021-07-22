@@ -2,6 +2,7 @@ package net.yoplitein.badmap;
 
 import java.awt.image.BufferedImage;
 import java.io.File;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -11,7 +12,6 @@ import java.util.List;
 import java.util.Random;
 import java.util.Set;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import javax.imageio.ImageIO;
 
@@ -21,6 +21,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.world.ChunkTicketType;
 import net.minecraft.server.world.ServerChunkManager;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.util.WorldSavePath;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.util.math.MathHelper;
@@ -44,8 +45,9 @@ public class RenderJob
 		this.chunkManager = this.world.getChunkManager();
 	}
 	
-	public void fullRender()
+	public void render(boolean force)
 	{
+		final var regionDir = server.getSavePath(WorldSavePath.ROOT).resolve("region");
 		final var tileDir = bmapDir.toPath().resolve("tiles");
 		tileDir.toFile().mkdir();
 		
@@ -54,6 +56,14 @@ public class RenderJob
 			final var populated = discoverChunks(Arrays.asList(world.getSpawnPos()));
 			final var regions = groupRegions(populated);
 			
+			if(!force)
+			{
+				final int before = regions.size();
+				regions.removeIf(set -> !isRegionOutdated(regionDir, tileDir, set.pos));
+				BadMap.LOGGER.info("skipping {} up-to-date regions", regions.size() - before);
+			}
+			
+			// FIXME: use futures to free up threadpool
 			for(var set: regions)
 			{
 				final var img = renderRegion(set);
@@ -66,7 +76,7 @@ public class RenderJob
 		});
 	}
 	
-	public Set<ChunkPos> discoverChunks(List<BlockPos> seeds)
+	private Set<ChunkPos> discoverChunks(List<BlockPos> seeds)
 	{
 		final var searchRadius = 4;
 		final var anvil = chunkManager.threadedAnvilChunkStorage;
@@ -154,6 +164,7 @@ public class RenderJob
 			return populated
 				.stream()
 				.map(pos -> world.getChunk(pos.x, pos.z))
+				.collect(Collectors.toList())
 			;
 		}).join();
 		BadMap.LOGGER.info("get done");
@@ -179,12 +190,9 @@ public class RenderJob
 		final var heightmap = chunk.getHeightmap(Heightmap.Type.WORLD_SURFACE);
 		final var random = new Random(chunkPos.x + chunkPos.z);
 		
-		// FIXME: this is all probably wrong
 		final var posInRegion = new ChunkPos(chunkPos.x - 32 * regionPos.x, chunkPos.z - 32 * regionPos.z);
 		final var offsetX = 16 * (posInRegion.x < 0 ? (32 - Math.abs(posInRegion.x)) : posInRegion.x);
 		final var offsetZ = 16 * (posInRegion.z < 0 ? (32 - Math.abs(posInRegion.z)) : posInRegion.z);
-		
-		BadMap.LOGGER.info("rendering chunk {} (region {}, in region {}) with offset {},{}", chunkPos, regionPos, posInRegion, offsetX, offsetZ);
 		
 		final var blockPos = new BlockPos.Mutable();
 		for(int x = 0; x < 16; x++)
@@ -229,15 +237,37 @@ public class RenderJob
 					shade = fract >= 0.5 ? MathHelper.ceil(val) : MathHelper.floor(val);
 				}
 				else
-					shade = random.nextInt(3);
+					shade = random.nextInt(3); // FIXME: make proportional to heights or something
 				
 				regionImage.setRGB(offsetX + x, offsetZ + z, color == MapColor.CLEAR ? 0 : getARGB(color, shade));
 			}
 	}
 	
+	private boolean isRegionOutdated(Path regionDir, Path tileDir, RegionPos pos)
+	{
+		final var tile = tileDir.resolve(tileFilename(pos)).toFile();
+		final var region = regionDir.resolve(regionFilename(pos)).toFile();
+		
+		if(!tile.exists()) return true;
+		if(!region.exists())
+		{
+			BadMap.LOGGER.warn("rendering chunk {} in a region that has not yet been written to disk", pos);
+			return true;
+		}
+		
+		if(tile.lastModified() < region.lastModified()) return true;
+		
+		return false;
+	}
+	
 	private static String tileFilename(RegionPos pos)
 	{
 		return String.format("%d_%d.png", pos.x, pos.z);
+	}
+	
+	private static String regionFilename(RegionPos pos)
+	{
+		return String.format("r.%d.%d.mca", pos.x, pos.z);
 	}
 	
 	private static void writePNG(File file, BufferedImage img)
