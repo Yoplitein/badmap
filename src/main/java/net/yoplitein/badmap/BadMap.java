@@ -111,7 +111,7 @@ public class BadMap implements DedicatedServerModInitializer
 		final var bmapDir = server.getRunDirectory().toPath().resolve("bmap").toFile(); // TODO: config
 		bmapDir.mkdir();
 		
-		final var job = new RenderJob(bmapDir, server);
+		final var job = new RenderJob(bmapDir.toPath(), server);
 		job.render(force);
 		
 		return 1;

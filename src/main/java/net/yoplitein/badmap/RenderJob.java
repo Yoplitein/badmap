@@ -5,23 +5,21 @@ import java.io.File;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Random;
-import java.util.Set;
 import java.util.stream.Collectors;
 
 import javax.imageio.ImageIO;
 
+import net.fabricmc.fabric.api.util.NbtType;
 import net.minecraft.block.MapColor;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.world.ChunkTicketType;
 import net.minecraft.server.world.ServerChunkManager;
 import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.WorldSavePath;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.util.math.MathHelper;
@@ -32,14 +30,16 @@ import net.minecraft.world.chunk.ChunkStatus.ChunkType;
 
 public class RenderJob
 {
-	final File bmapDir;
+	final Path bmapDir;
+	final Path tileDir;
 	final MinecraftServer server;
 	final ServerWorld world;
 	final ServerChunkManager chunkManager;
 	
-	public RenderJob(File bmapDir, MinecraftServer server)
+	public RenderJob(Path bmapDir, MinecraftServer server)
 	{
 		this.bmapDir = bmapDir;
+		this.tileDir = bmapDir.resolve("tiles"); // TODO: config
 		this.server = server;
 		this.world = server.getOverworld();
 		this.chunkManager = this.world.getChunkManager();
@@ -47,8 +47,6 @@ public class RenderJob
 	
 	public void render(boolean force)
 	{
-		final var regionDir = server.getSavePath(WorldSavePath.ROOT).resolve("region");
-		final var tileDir = bmapDir.toPath().resolve("tiles");
 		tileDir.toFile().mkdir();
 		
 		BadMap.THREADPOOL.execute(() -> {
@@ -59,8 +57,8 @@ public class RenderJob
 			if(!force)
 			{
 				final int before = regions.size();
-				regions.removeIf(set -> !isRegionOutdated(regionDir, tileDir, set.pos));
-				BadMap.LOGGER.info("skipping {} up-to-date regions", regions.size() - before);
+				regions.removeIf(set -> !isRegionOutdated(tileDir, set));
+				BadMap.LOGGER.info("skipping {} up-to-date regions", before - regions.size());
 			}
 			
 			// FIXME: use futures to free up threadpool
@@ -76,11 +74,11 @@ public class RenderJob
 		});
 	}
 	
-	private Set<ChunkPos> discoverChunks(List<BlockPos> seeds)
+	private List<ChunkInfo> discoverChunks(List<BlockPos> seeds)
 	{
 		final var searchRadius = 4;
 		final var anvil = chunkManager.threadedAnvilChunkStorage;
-		final var visited = new HashMap<ChunkPos, NbtCompound>();
+		final var visited = new HashMap<ChunkPos, Long>();
 		final var queue = new LinkedList<ChunkPos>();
 		ChunkPos coord;
 		
@@ -102,8 +100,17 @@ public class RenderJob
 			
 			if(ChunkSerializer.getChunkType(chunkNBT) != ChunkType.LEVELCHUNK) chunkNBT = null;
 			
-			visited.put(coord, chunkNBT);
-			if(chunkNBT == null) continue;
+			if(chunkNBT == null)
+			{
+				visited.put(coord, null);
+				continue;
+			}
+			else
+			{
+				final var level = chunkNBT.getCompound("Level");
+				final var mtime = level.contains("bm__mtime", NbtType.LONG) ? level.getLong("bm__mtime") : 0;
+				visited.put(coord, mtime);
+			}
 			
 			for(int dx = -searchRadius; dx < searchRadius + 1; dx++)
 				for(int dz = -searchRadius; dz < searchRadius + 1; dz++)
@@ -116,16 +123,21 @@ public class RenderJob
 		
 		visited.entrySet().removeIf(entry -> entry.getValue() == null);
 		
-		return visited.keySet();
+		return visited
+			.entrySet()
+			.stream()
+			.map(pair -> new ChunkInfo(pair.getKey(), pair.getValue()))
+			.collect(Collectors.toList())
+		;
 	}
 	
-	private List<RegionSet> groupRegions(Collection<ChunkPos> populated)
+	private List<RegionSet> groupRegions(List<ChunkInfo> populated)
 	{
-		final var regions = new HashMap<RegionPos, List<ChunkPos>>();
+		final var regions = new HashMap<RegionPos, List<ChunkInfo>>();
 		
-		for(var pos: populated)
+		for(var info: populated)
 		{
-			final var regionPos = RegionPos.of(pos);
+			final var regionPos = RegionPos.of(info.pos);
 			var list = regions.get(regionPos);
 			
 			if(list == null)
@@ -134,7 +146,7 @@ public class RenderJob
 				regions.put(regionPos, list);
 			}
 			
-			list.add(pos);
+			list.add(info);
 		}
 		
 		return regions
@@ -154,8 +166,8 @@ public class RenderJob
 		// FIXME
 		server.submit(() -> {
 			BadMap.LOGGER.info("force loading chunks");
-			for(var chunk: populated)
-				chunkManager.addTicket(ChunkTicketType.FORCED, chunk, 0, chunk);
+			for(var info: populated)
+				chunkManager.addTicket(ChunkTicketType.FORCED, info.pos, 0, info.pos);
 		}).join();
 		BadMap.LOGGER.info("forceload done");
 		final var chunks = server.submit(() -> {
@@ -163,12 +175,11 @@ public class RenderJob
 			// intentionally wait for next tick, all should be loaded now
 			return populated
 				.stream()
-				.map(pos -> world.getChunk(pos.x, pos.z))
+				.map(info -> world.getChunk(info.pos.x, info.pos.z))
 				.collect(Collectors.toList())
 			;
 		}).join();
 		BadMap.LOGGER.info("get done");
-		// final var chunk = server.submit(() -> world.getChunk(coord.x, coord.z)).join();
 		
 		final var start = System.currentTimeMillis();
 		// TODO: parallelism
@@ -177,8 +188,8 @@ public class RenderJob
 		BadMap.LOGGER.info("rendered region in {} ms", end - start);
 		
 		server.submit(() -> {
-			for(var chunk: populated)
-				chunkManager.removeTicket(ChunkTicketType.FORCED, chunk, 0, chunk);
+			for(var info: populated)
+				chunkManager.removeTicket(ChunkTicketType.FORCED, info.pos, 0, info.pos);
 		});
 		
 		return img;
@@ -243,19 +254,20 @@ public class RenderJob
 			}
 	}
 	
-	private boolean isRegionOutdated(Path regionDir, Path tileDir, RegionPos pos)
+	private boolean isRegionOutdated(Path tileDir, RegionSet set)
 	{
+		final var pos = set.pos;
 		final var tile = tileDir.resolve(tileFilename(pos)).toFile();
-		final var region = regionDir.resolve(regionFilename(pos)).toFile();
-		
 		if(!tile.exists()) return true;
-		if(!region.exists())
-		{
-			BadMap.LOGGER.warn("rendering chunk {} in a region that has not yet been written to disk", pos);
-			return true;
-		}
 		
-		if(tile.lastModified() < region.lastModified()) return true;
+		final var newestChunk = set
+			.populatedChunks
+			.stream()
+			.map(info -> info.mtime)
+			.max(Long::compare)
+			.orElseThrow()
+		;
+		if(tile.lastModified() < newestChunk) return true;
 		
 		return false;
 	}
@@ -263,11 +275,6 @@ public class RenderJob
 	private static String tileFilename(RegionPos pos)
 	{
 		return String.format("%d_%d.png", pos.x, pos.z);
-	}
-	
-	private static String regionFilename(RegionPos pos)
-	{
-		return String.format("r.%d.%d.mca", pos.x, pos.z);
 	}
 	
 	private static void writePNG(File file, BufferedImage img)
@@ -302,5 +309,6 @@ public class RenderJob
 		}
 	}
 	
-	static record RegionSet(RegionPos pos, List<ChunkPos> populatedChunks) {}
+	static record ChunkInfo(ChunkPos pos, long mtime) {}
+	static record RegionSet(RegionPos pos, List<ChunkInfo> populatedChunks) {}
 }
