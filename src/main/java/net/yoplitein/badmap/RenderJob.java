@@ -13,6 +13,8 @@ import java.util.stream.Collectors;
 
 import javax.imageio.ImageIO;
 
+import org.jetbrains.annotations.Nullable;
+
 import net.fabricmc.fabric.api.util.NbtType;
 import net.minecraft.block.MapColor;
 import net.minecraft.nbt.NbtCompound;
@@ -64,8 +66,17 @@ public class RenderJob
 			// FIXME: use futures to free up threadpool
 			for(var set: regions)
 			{
-				final var img = renderRegion(set);
 				final var outFile = tileDir.resolve(tileFilename(set.pos)).toFile();
+				
+				BufferedImage existing = null;
+				long mtime = 0;
+				if(!force && outFile.exists())
+				{
+					existing = readPNG(outFile);
+					mtime = outFile.lastModified();
+				}
+				
+				final var img = renderRegion(existing, mtime, set);
 				writePNG(outFile, img);
 			}
 			
@@ -157,40 +168,35 @@ public class RenderJob
 		;
 	}
 	
-	private BufferedImage renderRegion(RegionSet set)
+	private BufferedImage renderRegion(@Nullable BufferedImage existingImg, long imageMtime, RegionSet set)
 	{
 		final var regionPos = set.pos;
 		final var populated = set.populatedChunks;
-		final var img = new BufferedImage(512, 512, BufferedImage.TYPE_4BYTE_ABGR);
+		final var img = existingImg == null ? new BufferedImage(512, 512, BufferedImage.TYPE_4BYTE_ABGR) : existingImg;
 		
-		// FIXME
-		server.submit(() -> {
-			BadMap.LOGGER.info("force loading chunks");
-			for(var info: populated)
-				chunkManager.addTicket(ChunkTicketType.FORCED, info.pos, 0, info.pos);
-		}).join();
-		BadMap.LOGGER.info("forceload done");
-		final var chunks = server.submit(() -> {
-			BadMap.LOGGER.info("getting chunks");
-			// intentionally wait for next tick, all should be loaded now
-			return populated
+		server.submit(() -> populated.forEach(info -> chunkManager.addTicket(ChunkTicketType.FORCED, info.pos, 0, info.pos))).join();
+		
+		// intentionally wait for next tick, all should be loaded now
+		final var chunks = server.submit(() ->
+			populated
 				.stream()
 				.map(info -> world.getChunk(info.pos.x, info.pos.z))
 				.collect(Collectors.toList())
-			;
-		}).join();
-		BadMap.LOGGER.info("get done");
+		).join();
+		
+		if(existingImg != null)
+		{
+			final var before = chunks.size();
+			chunks.removeIf(chunk -> ((MtimeAccessor)chunk).getMtime() < imageMtime);
+			BadMap.LOGGER.info("reusing renders for {} up to date chunks", before - chunks.size());
+		}
 		
 		final var start = System.currentTimeMillis();
-		// TODO: parallelism
-		chunks.forEach(chunk -> renderChunk(img, regionPos, chunk));
+		chunks.forEach(chunk -> renderChunk(img, regionPos, chunk)); // TODO: parallelism
 		final var end = System.currentTimeMillis();
 		BadMap.LOGGER.info("rendered region in {} ms", end - start);
 		
-		server.submit(() -> {
-			for(var info: populated)
-				chunkManager.removeTicket(ChunkTicketType.FORCED, info.pos, 0, info.pos);
-		});
+		server.submit(() -> populated.forEach(info -> chunkManager.removeTicket(ChunkTicketType.FORCED, info.pos, 0, info.pos)));
 		
 		return img;
 	}
@@ -283,9 +289,21 @@ public class RenderJob
 		{
 			ImageIO.write(img, "png", file);
 		}
-		catch(Exception e)
+		catch(Exception err)
 		{
-			throw new RuntimeException("failed to save image", e);
+			throw new RuntimeException("failed to save png", err);
+		}
+	}
+	
+	private static BufferedImage readPNG(File file)
+	{
+		try
+		{
+			return ImageIO.read(file);
+		}
+		catch(Exception err)
+		{
+			throw new RuntimeException("failed to load png", err);
 		}
 	}
 	
