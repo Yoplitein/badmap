@@ -1,0 +1,17 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "net.yoplitein.badmap.mixin",
+  "compatibilityLevel": "JAVA_16",
+  "mixins": [
+    "ChunkSerializerMixin",
+    "WorldChunkMixin"
+  ],
+  "client": [
+  ],
+  "server": [
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

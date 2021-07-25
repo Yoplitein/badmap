@@ -23,6 +23,7 @@
     ]
   },
   "mixins": [
+    "badmap.mixins.json"
   ],
 
   "depends": {
