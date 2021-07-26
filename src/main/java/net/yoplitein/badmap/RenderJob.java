@@ -211,7 +211,7 @@ public class RenderJob
 		final var blockPos = new BlockPos.Mutable();
 		for(int x = 0; x < 16; x++)
 		{
-			// tracks prior topmost block for shading
+			// tracks prior topmost block, controlling terrain shading
 			int prevHeight = world.getTopY(Heightmap.Type.WORLD_SURFACE, chunkPos.getStartX() + x, chunkPos.getStartZ() - 1) - 1;
 			
 			for(int z = 0; z < 16; z++)
@@ -220,8 +220,6 @@ public class RenderJob
 				MapColor color = MapColor.CLEAR;
 				
 				boolean isWater = false;
-				int waterDepth = 0;
-				MapColor blendColor = null; // block under the water
 				
 				blockPos.set(chunkPos.getStartX() + x, y, chunkPos.getStartZ() + z);
 				while(y > chunk.getBottomY())
@@ -239,8 +237,10 @@ public class RenderJob
 					y--;
 				}
 				
-				final var waterTop = y;
+				final var waterTop = y; // value of prevHeight for next z
 				
+				int waterDepth = 0;
+				MapColor blendColor = null; // color of submerged block
 				for(int maxSearch = 0; isWater && y > chunk.getBottomY() && maxSearch < 15; maxSearch++)
 				{
 					y--;
@@ -263,13 +263,23 @@ public class RenderJob
 				{
 					final var delta = prevHeight <= world.getBottomY() ? 0 : waterTop - prevHeight;
 					
-					// select a color from a (mostly uniform) distribution over [0, 3]
+					// select shade from a (sort-of uniform) height-dependent distribution over [0, 3] with median 2
 					// i.e. negative delta gives darker colors, positive gives lighter
 					final var val = Utils.round(MathHelper.clamp(1.5 + (delta / 2.0), 0.0, 3.0));
 					shade = ORDERED_SHADES[3 - val];
 				}
 				
-				regionImage.setRGB(offsetX + x, offsetZ + z, color == MapColor.CLEAR ? 0 : Utils.getARGB(color, shade, blendColor));
+				regionImage.setRGB(
+					offsetX + x,
+					offsetZ + z,
+					color == MapColor.CLEAR ? 0 : // set transparent on void
+					blendColor != null ? Utils.getARGB(color, shade) : // fast path when not blending
+					Utils.blendColors(
+						Utils.getARGB(color, shade),
+						Utils.getARGB(blendColor, ORDERED_SHADES[0]), // blend water shade with brightest shade of submerged block
+						0.25 // TODO: vary blend strength with water depth, maybe expand maxSearch to 30-60?
+					)
+				);
 				prevHeight = waterTop;
 			}
 		}

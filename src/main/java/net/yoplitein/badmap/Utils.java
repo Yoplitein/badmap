@@ -50,18 +50,10 @@ public class Utils
 		}
 	}
 	
-	public static int getARGB(MapColor color, int shade, @Nullable MapColor blend)
+	public static int getARGB(MapColor color, int shade)
 	{
 		final var val = color.getRenderColor(shade);
 		var valChans = getChannels(val);
-		
-		if(blend != null)
-		{
-			final var blendVal = blend.getRenderColor(2);
-			var blendChans = getChannels(blendVal);
-			for(int c = 0; c < 3; c++)
-				valChans[c] = MathHelper.clamp(valChans[c] + (int)(0.25 * blendChans[c]), 0, 255);
-		}
 		
 		return
 			0xFF000000 |
@@ -71,6 +63,16 @@ public class Utils
 		;
 	}
 	
+	public static int blendColors(int base, int overlay, double strength)
+	{
+		var baseChans = getChannels(base);
+		var overlayChans = getChannels(overlay);
+		for(int c = 0; c < 3; c++)
+			baseChans[c] = MathHelper.clamp(baseChans[c] + (int)(strength * overlayChans[c]), 0, 255);
+			
+		return fromChannels(baseChans);
+	}
+	
 	public static int[] getChannels(int color)
 	{
 		return new int[]{
@@ -78,6 +80,15 @@ public class Utils
 			(color & 0x00FF00) >> 8,
 			(color & 0x0000FF)
 		};
+	}
+	
+	public static int fromChannels(int[] channels)
+	{
+		return
+			(channels[0] & 0xFF) << 16 |
+			(channels[1] & 0xFF) << 8 |
+			(channels[2] & 0xFF)
+		;
 	}
 	
 	public static int round(double val)
