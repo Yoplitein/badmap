@@ -30,7 +30,7 @@ public class BadMap implements DedicatedServerModInitializer
 	{
 		CommandRegistrationCallback.EVENT.register((dispatcher, dedicated) -> {
 			dispatcher.register(
-				literal("bm")
+				literal("bm") // TODO: add as alias of badmap
 					.requires(executor -> executor.hasPermissionLevel(4))
 					.then(
 						literal("test")

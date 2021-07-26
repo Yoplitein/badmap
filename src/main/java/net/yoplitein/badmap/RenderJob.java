@@ -8,7 +8,6 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
-import java.util.Random;
 import java.util.stream.Collectors;
 
 import javax.imageio.ImageIO;
@@ -32,6 +31,7 @@ import net.minecraft.world.chunk.ChunkStatus.ChunkType;
 
 public class RenderJob
 {
+	static final int[] ORDERED_SHADES = {2, 1, 0, 3}; // lightest to darkest
 	final Path bmapDir;
 	final Path tileDir;
 	final MinecraftServer server;
@@ -205,7 +205,6 @@ public class RenderJob
 	{
 		final var chunkPos = chunk.getPos();
 		final var heightmap = chunk.getHeightmap(Heightmap.Type.WORLD_SURFACE);
-		final var random = new Random(chunkPos.x + chunkPos.z);
 		
 		final var posInRegion = new ChunkPos(chunkPos.x - 32 * regionPos.x, chunkPos.z - 32 * regionPos.z);
 		final var offsetX = 16 * (posInRegion.x < 0 ? (32 - Math.abs(posInRegion.x)) : posInRegion.x);
@@ -213,15 +212,20 @@ public class RenderJob
 		
 		final var blockPos = new BlockPos.Mutable();
 		for(int x = 0; x < 16; x++)
+		{
+			// tracks prior topmost block for shading
+			int prevHeight = world.getTopY(Heightmap.Type.WORLD_SURFACE, chunkPos.getStartX() + x, chunkPos.getStartZ() - 1) - 1;
+			
 			for(int z = 0; z < 16; z++)
 			{
 				var y = heightmap.get(x, z);
 				MapColor color = MapColor.CLEAR;
-				int waterDepth = 0;
+				
 				boolean isWater = false;
+				int waterDepth = 0;
+				MapColor blendColor = null; // block under the water
 				
 				blockPos.set(chunkPos.getStartX() + x, y, chunkPos.getStartZ() + z);
-				
 				while(y > chunk.getBottomY())
 				{
 					blockPos.setY(y);
@@ -237,27 +241,40 @@ public class RenderJob
 					y--;
 				}
 				
-				while(isWater && y > chunk.getBottomY())
+				final var waterTop = y;
+				
+				for(int maxSearch = 0; isWater && y > chunk.getBottomY() && maxSearch < 15; maxSearch++)
 				{
 					y--;
 					blockPos.setY(y);
-					if(chunk.getBlockState(blockPos).getFluidState().isEmpty()) break;
+					final var state = chunk.getBlockState(blockPos);
+					
+					if(state.getFluidState().isEmpty())
+					{
+						blendColor = state.getMapColor(world, blockPos);
+						break;
+					}
+					
 					waterDepth += 1;
 				}
 				
 				int shade;
 				if(isWater)
-				{
-					final var val = MathHelper.floor(MathHelper.clamp(waterDepth / 5.0, 0.0, 3.0));
-					final var fract = MathHelper.fractionalPart(val);
-					
-					shade = fract >= 0.5 ? MathHelper.ceil(val) : MathHelper.floor(val);
-				}
+					shade = ORDERED_SHADES[round(MathHelper.clamp(waterDepth / 5.0, 0.0, 3.0))];
 				else
-					shade = random.nextInt(3); // FIXME: make proportional to heights or something
+				{
+					final var delta = prevHeight <= world.getBottomY() ? 0 : waterTop - prevHeight;
+					
+					// select a color from a (mostly uniform) distribution over [0, 3]
+					// i.e. negative delta gives darker colors, positive gives lighter
+					final var val = round(MathHelper.clamp(1.5 + (delta / 2.0), 0.0, 3.0));
+					shade = ORDERED_SHADES[3 - val];
+				}
 				
-				regionImage.setRGB(offsetX + x, offsetZ + z, color == MapColor.CLEAR ? 0 : getARGB(color, shade));
+				regionImage.setRGB(offsetX + x, offsetZ + z, color == MapColor.CLEAR ? 0 : getARGB(color, shade, blendColor));
+				prevHeight = waterTop;
 			}
+		}
 	}
 	
 	private boolean isRegionOutdated(Path tileDir, RegionSet set)
@@ -307,16 +324,40 @@ public class RenderJob
 		}
 	}
 	
-	private static int getARGB(MapColor color, int shade)
+	private static int getARGB(MapColor color, int shade, @Nullable MapColor blend)
 	{
 		final var val = color.getRenderColor(shade);
+		var valChans = getChannels(val);
+		
+		if(blend != null)
+		{
+			final var blendVal = blend.getRenderColor(2);
+			var blendChans = getChannels(blendVal);
+			for(int c = 0; c < 3; c++)
+				valChans[c] = MathHelper.clamp(valChans[c] + (int)(0.25 * blendChans[c]), 0, 255);
+		}
 		
 		return
 			0xFF000000 |
-			(val & 0xFF0000) >> 16 |
-			(val & 0x00FF00) |
-			(val & 0x0000FF) << 16
+			valChans[0] |
+			valChans[1] << 8 |
+			valChans[2] << 16
 		;
+	}
+	
+	private static int[] getChannels(int color)
+	{
+		return new int[]{
+			(color & 0xFF0000) >> 16,
+			(color & 0x00FF00) >> 8,
+			(color & 0x0000FF)
+		};
+	}
+	
+	private static int round(double val)
+	{
+		final var fract = MathHelper.fractionalPart(val);
+		return fract >= 0.5 ? MathHelper.ceil(val) : MathHelper.floor(val);
 	}
 	
 	static record RegionPos(int x, int z)
