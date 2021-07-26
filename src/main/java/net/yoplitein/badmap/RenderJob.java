@@ -1,7 +1,6 @@
 package net.yoplitein.badmap;
 
 import java.awt.image.BufferedImage;
-import java.io.File;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -9,8 +8,6 @@ import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.stream.Collectors;
-
-import javax.imageio.ImageIO;
 
 import org.jetbrains.annotations.Nullable;
 
@@ -28,6 +25,7 @@ import net.minecraft.world.ChunkSerializer;
 import net.minecraft.world.Heightmap;
 import net.minecraft.world.chunk.Chunk;
 import net.minecraft.world.chunk.ChunkStatus.ChunkType;
+import net.yoplitein.badmap.Utils.RegionPos;
 
 public class RenderJob
 {
@@ -66,18 +64,18 @@ public class RenderJob
 			// FIXME: use futures to free up threadpool
 			for(var set: regions)
 			{
-				final var outFile = tileDir.resolve(tileFilename(set.pos)).toFile();
+				final var outFile = tileDir.resolve(Utils.tileFilename(set.pos)).toFile();
 				
 				BufferedImage existing = null;
 				long mtime = 0;
 				if(!force && outFile.exists())
 				{
-					existing = readPNG(outFile);
+					existing = Utils.readPNG(outFile);
 					mtime = outFile.lastModified();
 				}
 				
 				final var img = renderRegion(existing, mtime, set);
-				writePNG(outFile, img);
+				Utils.writePNG(outFile, img);
 			}
 			
 			final var end = System.currentTimeMillis();
@@ -142,7 +140,7 @@ public class RenderJob
 		;
 	}
 	
-	private List<RegionSet> groupRegions(List<ChunkInfo> populated)
+	private static List<RegionSet> groupRegions(List<ChunkInfo> populated)
 	{
 		final var regions = new HashMap<RegionPos, List<ChunkInfo>>();
 		
@@ -206,7 +204,7 @@ public class RenderJob
 		final var chunkPos = chunk.getPos();
 		final var heightmap = chunk.getHeightmap(Heightmap.Type.WORLD_SURFACE);
 		
-		final var posInRegion = new ChunkPos(chunkPos.x - 32 * regionPos.x, chunkPos.z - 32 * regionPos.z);
+		final var posInRegion = new ChunkPos(chunkPos.x - 32 * regionPos.x(), chunkPos.z - 32 * regionPos.z());
 		final var offsetX = 16 * (posInRegion.x < 0 ? (32 - Math.abs(posInRegion.x)) : posInRegion.x);
 		final var offsetZ = 16 * (posInRegion.z < 0 ? (32 - Math.abs(posInRegion.z)) : posInRegion.z);
 		
@@ -260,27 +258,27 @@ public class RenderJob
 				
 				int shade;
 				if(isWater)
-					shade = ORDERED_SHADES[round(MathHelper.clamp(waterDepth / 5.0, 0.0, 3.0))];
+					shade = ORDERED_SHADES[Utils.round(MathHelper.clamp(waterDepth / 5.0, 0.0, 3.0))];
 				else
 				{
 					final var delta = prevHeight <= world.getBottomY() ? 0 : waterTop - prevHeight;
 					
 					// select a color from a (mostly uniform) distribution over [0, 3]
 					// i.e. negative delta gives darker colors, positive gives lighter
-					final var val = round(MathHelper.clamp(1.5 + (delta / 2.0), 0.0, 3.0));
+					final var val = Utils.round(MathHelper.clamp(1.5 + (delta / 2.0), 0.0, 3.0));
 					shade = ORDERED_SHADES[3 - val];
 				}
 				
-				regionImage.setRGB(offsetX + x, offsetZ + z, color == MapColor.CLEAR ? 0 : getARGB(color, shade, blendColor));
+				regionImage.setRGB(offsetX + x, offsetZ + z, color == MapColor.CLEAR ? 0 : Utils.getARGB(color, shade, blendColor));
 				prevHeight = waterTop;
 			}
 		}
 	}
 	
-	private boolean isRegionOutdated(Path tileDir, RegionSet set)
+	private static boolean isRegionOutdated(Path tileDir, RegionSet set)
 	{
 		final var pos = set.pos;
-		final var tile = tileDir.resolve(tileFilename(pos)).toFile();
+		final var tile = tileDir.resolve(Utils.tileFilename(pos)).toFile();
 		if(!tile.exists()) return true;
 		
 		final var newestChunk = set
@@ -293,79 +291,6 @@ public class RenderJob
 		if(tile.lastModified() < newestChunk) return true;
 		
 		return false;
-	}
-	
-	private static String tileFilename(RegionPos pos)
-	{
-		return String.format("%d_%d.png", pos.x, pos.z);
-	}
-	
-	private static void writePNG(File file, BufferedImage img)
-	{
-		try
-		{
-			ImageIO.write(img, "png", file);
-		}
-		catch(Exception err)
-		{
-			throw new RuntimeException("failed to save png", err);
-		}
-	}
-	
-	private static BufferedImage readPNG(File file)
-	{
-		try
-		{
-			return ImageIO.read(file);
-		}
-		catch(Exception err)
-		{
-			throw new RuntimeException("failed to load png", err);
-		}
-	}
-	
-	private static int getARGB(MapColor color, int shade, @Nullable MapColor blend)
-	{
-		final var val = color.getRenderColor(shade);
-		var valChans = getChannels(val);
-		
-		if(blend != null)
-		{
-			final var blendVal = blend.getRenderColor(2);
-			var blendChans = getChannels(blendVal);
-			for(int c = 0; c < 3; c++)
-				valChans[c] = MathHelper.clamp(valChans[c] + (int)(0.25 * blendChans[c]), 0, 255);
-		}
-		
-		return
-			0xFF000000 |
-			valChans[0] |
-			valChans[1] << 8 |
-			valChans[2] << 16
-		;
-	}
-	
-	private static int[] getChannels(int color)
-	{
-		return new int[]{
-			(color & 0xFF0000) >> 16,
-			(color & 0x00FF00) >> 8,
-			(color & 0x0000FF)
-		};
-	}
-	
-	private static int round(double val)
-	{
-		final var fract = MathHelper.fractionalPart(val);
-		return fract >= 0.5 ? MathHelper.ceil(val) : MathHelper.floor(val);
-	}
-	
-	static record RegionPos(int x, int z)
-	{
-		static RegionPos of(ChunkPos pos)
-		{
-			return new RegionPos(pos.x >> 5, pos.z >> 5);
-		}
 	}
 	
 	static record ChunkInfo(ChunkPos pos, long mtime) {}
