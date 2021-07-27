@@ -5,8 +5,6 @@ import java.io.File;
 
 import javax.imageio.ImageIO;
 
-import org.jetbrains.annotations.Nullable;
-
 import net.minecraft.block.MapColor;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.util.math.MathHelper;
@@ -18,6 +16,38 @@ public class Utils
 		static RegionPos of(ChunkPos pos)
 		{
 			return new RegionPos(pos.x >> 5, pos.z >> 5);
+		}
+	}
+	
+	public static record RGB(int r, int g, int b)
+	{
+		public RGB(int argb)
+		{
+			this(
+				(argb & 0xFF0000) >> 16,
+				(argb & 0x00FF00) >> 8,
+				(argb & 0x0000FF)
+			);
+		}
+		
+		public int toARGB()
+		{
+			return
+				0xFF000000 |
+				(r & 0xFF) << 16 |
+				(g & 0xFF) << 8 |
+				(b & 0xFF)
+			;
+		}
+		
+		public int toABGR()
+		{
+			return
+				0xFF000000 |
+				r |
+				g << 8 |
+				b << 16
+			;
 		}
 	}
 	
@@ -50,50 +80,23 @@ public class Utils
 		}
 	}
 	
-	public static int getARGB(MapColor color, int shade)
+	public static RGB getMapColor(MapColor color, int shade)
 	{
-		final var val = color.getRenderColor(shade);
-		var valChans = getChannels(val);
-		
-		return
-			0xFF000000 |
-			valChans[0] |
-			valChans[1] << 8 |
-			valChans[2] << 16
-		;
+		return new RGB(color.getRenderColor(shade));
 	}
 	
-	public static int blendColors(int base, int overlay, double strength)
+	public static RGB blendColors(RGB base, RGB overlay, double strength)
 	{
-		var baseChans = getChannels(base);
-		var overlayChans = getChannels(overlay);
-		for(int c = 0; c < 3; c++)
-			baseChans[c] = MathHelper.clamp(baseChans[c] + (int)(strength * overlayChans[c]), 0, 255);
-			
-		return fromChannels(baseChans);
-	}
-	
-	public static int[] getChannels(int color)
-	{
-		return new int[]{
-			(color & 0xFF0000) >> 16,
-			(color & 0x00FF00) >> 8,
-			(color & 0x0000FF)
-		};
-	}
-	
-	public static int fromChannels(int[] channels)
-	{
-		return
-			(channels[0] & 0xFF) << 16 |
-			(channels[1] & 0xFF) << 8 |
-			(channels[2] & 0xFF)
-		;
+		return new RGB(
+			MathHelper.clamp(base.r + (int)(strength * overlay.r), 0, 255),
+			MathHelper.clamp(base.g + (int)(strength * overlay.g), 0, 255),
+			MathHelper.clamp(base.b + (int)(strength * overlay.b), 0, 255)
+		);
 	}
 	
 	public static int round(double val)
 	{
-		final var fract = MathHelper.fractionalPart(val);
-		return fract >= 0.5 ? MathHelper.ceil(val) : MathHelper.floor(val);
+		// NOTE: probably doesn't work on negative values
+		return MathHelper.fractionalPart(val) >= 0.5 ? MathHelper.ceil(val) : MathHelper.floor(val);
 	}
 }

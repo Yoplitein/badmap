@@ -51,7 +51,7 @@ public class RenderJob
 		
 		BadMap.THREADPOOL.execute(() -> {
 			final var start = System.currentTimeMillis(); // FIXME: debugging
-			final var populated = discoverChunks(Arrays.asList(world.getSpawnPos()));
+			final var populated = discoverChunks(Arrays.asList(world.getSpawnPos())); // FIXME: this needs to be cached
 			final var regions = groupRegions(populated);
 			
 			if(!force)
@@ -269,17 +269,20 @@ public class RenderJob
 					shade = ORDERED_SHADES[3 - val];
 				}
 				
-				regionImage.setRGB(
-					offsetX + x,
-					offsetZ + z,
-					color == MapColor.CLEAR ? 0 : // set transparent on void
-					blendColor != null ? Utils.getARGB(color, shade) : // fast path when not blending
-					Utils.blendColors(
-						Utils.getARGB(color, shade),
-						Utils.getARGB(blendColor, ORDERED_SHADES[0]), // blend water shade with brightest shade of submerged block
+				
+				int finalColor;
+				if(color == MapColor.CLEAR) // set transparent on void
+					finalColor = 0;
+				else if(blendColor == null) // fast path when not blending
+					finalColor = Utils.getMapColor(color, shade).toABGR();
+				else
+					finalColor = Utils.blendColors(
+						Utils.getMapColor(color, shade),
+						Utils.getMapColor(blendColor, ORDERED_SHADES[0]), // blend water shade with brightest shade of submerged block
 						0.25 // TODO: vary blend strength with water depth, maybe expand maxSearch to 30-60?
-					)
-				);
+					).toABGR();
+				
+				regionImage.setRGB(offsetX + x, offsetZ + z, finalColor);
 				prevHeight = waterTop;
 			}
 		}
