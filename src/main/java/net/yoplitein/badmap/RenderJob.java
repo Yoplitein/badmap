@@ -265,7 +265,7 @@ public class RenderJob
 					
 					// select shade from a (sort-of uniform) height-dependent distribution over [0, 3] with median 2
 					// i.e. negative delta gives darker colors, positive gives lighter
-					final var val = Utils.round(MathHelper.clamp(1.5 + (delta / 2.0), 0.0, 3.0));
+					final var val = Utils.round(MathHelper.clamp(1.5 + delta, 0.0, 3.0));
 					shade = ORDERED_SHADES[3 - val];
 				}
 				
