@@ -178,19 +178,26 @@ public class RenderJob
 		final var chunks = server.submit(() ->
 			populated
 				.stream()
-				.map(info -> world.getChunk(info.pos.x, info.pos.z))
-				.collect(Collectors.toList())
+				// .map(info -> world.getChunk(info.pos.x, info.pos.z))
+				.collect(Collectors.toMap(info -> info.pos, info -> {
+					final var main = world.getChunk(info.pos.x, info.pos.z);
+					
+					final var posInRegion = regionPos.chunkPosInRegion(info.pos);
+					final var toNorth = posInRegion.z == 0 ? null : world.getChunk(info.pos.x, info.pos.z - 1);
+					
+					return new ChunkPair(main, toNorth);
+				}))
 		).join();
 		
 		if(existingImg != null)
 		{
 			final var before = chunks.size();
-			chunks.removeIf(chunk -> ((MtimeAccessor)chunk).getMtime() < imageMtime);
+			chunks.entrySet().removeIf(pair -> ((MtimeAccessor)pair.getValue().main).getMtime() < imageMtime);
 			BadMap.LOGGER.info("reusing renders for {} up to date chunks", before - chunks.size());
 		}
 		
 		final var start = System.currentTimeMillis();
-		chunks.forEach(chunk -> renderChunk(img, regionPos, chunk)); // TODO: parallelism
+		chunks.values().forEach(pair -> renderChunk(img, regionPos, pair.main, pair.toNorth));
 		final var end = System.currentTimeMillis();
 		BadMap.LOGGER.info("rendered region in {} ms", end - start);
 		
@@ -199,12 +206,13 @@ public class RenderJob
 		return img;
 	}
 	
-	private void renderChunk(BufferedImage regionImage, RegionPos regionPos, Chunk chunk)
+	private void renderChunk(BufferedImage regionImage, RegionPos regionPos, Chunk chunk, @Nullable Chunk toNorth)
 	{
 		final var chunkPos = chunk.getPos();
 		final var heightmap = chunk.getHeightmap(Heightmap.Type.WORLD_SURFACE);
+		final var toNorthHeightmap = toNorth == null ? null : toNorth.getHeightmap(Heightmap.Type.WORLD_SURFACE);
 		
-		final var posInRegion = new ChunkPos(chunkPos.x - 32 * regionPos.x(), chunkPos.z - 32 * regionPos.z());
+		final var posInRegion = regionPos.chunkPosInRegion(chunkPos);
 		final var offsetX = 16 * (posInRegion.x < 0 ? (32 - Math.abs(posInRegion.x)) : posInRegion.x);
 		final var offsetZ = 16 * (posInRegion.z < 0 ? (32 - Math.abs(posInRegion.z)) : posInRegion.z);
 		
@@ -212,7 +220,8 @@ public class RenderJob
 		for(int x = 0; x < 16; x++)
 		{
 			// tracks prior topmost block, controlling terrain shading
-			int prevHeight = world.getTopY(Heightmap.Type.WORLD_SURFACE, chunkPos.getStartX() + x, chunkPos.getStartZ() - 1) - 1;
+			// for chunks not at the top of the region, we use the real value
+			int prevHeight = toNorth == null ? world.getBottomY() : toNorthHeightmap.get(x, 15) - 1;
 			
 			for(int z = 0; z < 16; z++)
 			{
@@ -305,6 +314,8 @@ public class RenderJob
 		
 		return false;
 	}
+	
+	static record ChunkPair(Chunk main, @Nullable Chunk toNorth) {}
 	
 	static record ChunkInfo(ChunkPos pos, long mtime) {}
 	static record RegionSet(RegionPos pos, List<ChunkInfo> populatedChunks) {}

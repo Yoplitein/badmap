@@ -17,6 +17,11 @@ public class Utils
 		{
 			return new RegionPos(pos.x >> 5, pos.z >> 5);
 		}
+		
+		ChunkPos chunkPosInRegion(ChunkPos worldspace)
+		{
+			return new ChunkPos(worldspace.x - 32 * x, worldspace.z - 32 * z);
+		}
 	}
 	
 	public static record RGB(int r, int g, int b)
