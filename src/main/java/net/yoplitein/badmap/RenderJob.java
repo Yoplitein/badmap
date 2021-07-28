@@ -4,9 +4,11 @@ import java.awt.image.BufferedImage;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 import org.jetbrains.annotations.Nullable;
@@ -15,7 +17,6 @@ import net.fabricmc.fabric.api.util.NbtType;
 import net.minecraft.block.MapColor;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.world.ChunkTicketType;
 import net.minecraft.server.world.ServerChunkManager;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
@@ -24,7 +25,10 @@ import net.minecraft.util.math.MathHelper;
 import net.minecraft.world.ChunkSerializer;
 import net.minecraft.world.Heightmap;
 import net.minecraft.world.chunk.Chunk;
+import net.minecraft.world.chunk.ChunkStatus;
 import net.minecraft.world.chunk.ChunkStatus.ChunkType;
+import net.minecraft.world.chunk.ReadOnlyChunk;
+import net.minecraft.world.chunk.WorldChunk;
 import net.yoplitein.badmap.Utils.RegionPos;
 
 public class RenderJob
@@ -50,9 +54,15 @@ public class RenderJob
 		tileDir.toFile().mkdir();
 		
 		BadMap.THREADPOOL.execute(() -> {
-			final var start = System.currentTimeMillis(); // FIXME: debugging
+			var start = System.currentTimeMillis(); // FIXME: debugging
 			final var populated = discoverChunks(Arrays.asList(world.getSpawnPos())); // FIXME: this needs to be cached
+			BadMap.LOGGER.info("found {} chunks in {} ms", populated.size(), System.currentTimeMillis() - start);
+			
+			start = System.currentTimeMillis();
 			final var regions = groupRegions(populated);
+			BadMap.LOGGER.info("grouped {} chunks into {} regions in {} ms", populated.size(), regions.size(), System.currentTimeMillis() - start);
+			
+			start = System.currentTimeMillis();
 			
 			if(!force)
 			{
@@ -83,11 +93,11 @@ public class RenderJob
 		});
 	}
 	
-	private List<ChunkInfo> discoverChunks(List<BlockPos> seeds)
+	private Collection<ChunkInfo> discoverChunks(List<BlockPos> seeds)
 	{
 		final var searchRadius = 4;
 		final var anvil = chunkManager.threadedAnvilChunkStorage;
-		final var visited = new HashMap<ChunkPos, Long>();
+		final var visited = new HashMap<ChunkPos, ChunkInfo>(1 << 14);
 		final var queue = new LinkedList<ChunkPos>();
 		ChunkPos coord;
 		
@@ -118,7 +128,7 @@ public class RenderJob
 			{
 				final var level = chunkNBT.getCompound("Level");
 				final var mtime = level.contains("bm__mtime", NbtType.LONG) ? level.getLong("bm__mtime") : 0;
-				visited.put(coord, mtime);
+				visited.put(coord, new ChunkInfo(coord, mtime, chunkNBT));
 			}
 			
 			for(int dx = -searchRadius; dx < searchRadius + 1; dx++)
@@ -130,19 +140,16 @@ public class RenderJob
 				}
 		}
 		
+		// TODO: query the nulls against world in case the chunk was recently generated without saving
+		
 		visited.entrySet().removeIf(entry -> entry.getValue() == null);
 		
-		return visited
-			.entrySet()
-			.stream()
-			.map(pair -> new ChunkInfo(pair.getKey(), pair.getValue()))
-			.collect(Collectors.toList())
-		;
+		return visited.values();
 	}
 	
-	private static List<RegionSet> groupRegions(List<ChunkInfo> populated)
+	private static List<RegionSet> groupRegions(Collection<ChunkInfo> populated)
 	{
-		final var regions = new HashMap<RegionPos, List<ChunkInfo>>();
+		final var regions = new HashMap<RegionPos, List<ChunkInfo>>(32);
 		
 		for(var info: populated)
 		{
@@ -169,25 +176,18 @@ public class RenderJob
 	private BufferedImage renderRegion(@Nullable BufferedImage existingImg, long imageMtime, RegionSet set)
 	{
 		final var regionPos = set.pos;
-		final var populated = set.populatedChunks;
 		final var img = existingImg == null ? new BufferedImage(512, 512, BufferedImage.TYPE_4BYTE_ABGR) : existingImg;
 		
-		server.submit(() -> populated.forEach(info -> chunkManager.addTicket(ChunkTicketType.FORCED, info.pos, 0, info.pos))).join();
-		
-		// intentionally wait for next tick, all should be loaded now
-		final var chunks = server.submit(() ->
-			populated
-				.stream()
-				// .map(info -> world.getChunk(info.pos.x, info.pos.z))
-				.collect(Collectors.toMap(info -> info.pos, info -> {
-					final var main = world.getChunk(info.pos.x, info.pos.z);
-					
-					final var posInRegion = regionPos.chunkPosInRegion(info.pos);
-					final var toNorth = posInRegion.z == 0 ? null : world.getChunk(info.pos.x, info.pos.z - 1);
-					
-					return new ChunkPair(main, toNorth);
-				}))
-		).join();
+		final var allChunks = parseChunks(set);
+		final var chunks = allChunks
+			.entrySet()
+			.stream()
+			.collect(Collectors.toMap(pair -> pair.getKey(), pair -> {
+				final var pos = pair.getKey();
+				final var north = new ChunkPos(pos.x, pos.z - 1);
+				return new ChunkPair(pair.getValue(), allChunks.getOrDefault(north, null));
+			}))
+		;
 		
 		if(existingImg != null)
 		{
@@ -199,11 +199,38 @@ public class RenderJob
 		final var start = System.currentTimeMillis();
 		chunks.values().forEach(pair -> renderChunk(img, regionPos, pair.main, pair.toNorth));
 		final var end = System.currentTimeMillis();
-		BadMap.LOGGER.info("rendered region in {} ms", end - start);
-		
-		server.submit(() -> populated.forEach(info -> chunkManager.removeTicket(ChunkTicketType.FORCED, info.pos, 0, info.pos)));
+		BadMap.LOGGER.info("rendered region ({} chunks) in {} ms", chunks.size(), end - start);
 		
 		return img;
+	}
+	
+	private Map<ChunkPos, Chunk> parseChunks(RegionSet set)
+	{
+		final var result = new HashMap<ChunkPos, Chunk>(set.populatedChunks.size(), 1f);
+		final var alreadyLoaded = server.submit(() ->
+			set
+				.populatedChunks
+				.stream()
+				.map(info -> (WorldChunk)world.getChunk(info.pos.x, info.pos.z, ChunkStatus.FULL, false))
+				.filter(chunk -> chunk != null)
+		).join();
+		
+		alreadyLoaded.forEach(chunk -> result.put(chunk.getPos(), chunk));
+		
+		final var structureManager = world.getStructureManager();
+		final var poiStorage = world.getPointOfInterestStorage();
+		
+		// TODO: this can be done in parallel, probably
+		for(var info: set.populatedChunks)
+		{
+			final var pos = info.pos;
+			if(result.containsKey(pos)) continue;
+			
+			final var chunk = (ReadOnlyChunk)ChunkSerializer.deserialize(world, structureManager, poiStorage, pos, info.nbt);
+			result.put(pos, chunk.getWrappedChunk());
+		}
+		
+		return result;
 	}
 	
 	private void renderChunk(BufferedImage regionImage, RegionPos regionPos, Chunk chunk, @Nullable Chunk toNorth)
@@ -317,6 +344,6 @@ public class RenderJob
 	
 	static record ChunkPair(Chunk main, @Nullable Chunk toNorth) {}
 	
-	static record ChunkInfo(ChunkPos pos, long mtime) {}
+	static record ChunkInfo(ChunkPos pos, long mtime, NbtCompound nbt) {}
 	static record RegionSet(RegionPos pos, List<ChunkInfo> populatedChunks) {}
 }
