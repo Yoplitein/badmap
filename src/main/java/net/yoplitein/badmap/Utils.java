@@ -2,6 +2,8 @@ package net.yoplitein.badmap;
 
 import java.awt.image.BufferedImage;
 import java.io.File;
+import java.util.function.BiConsumer;
+import java.util.function.Supplier;
 
 import javax.imageio.ImageIO;
 
@@ -103,5 +105,25 @@ public class Utils
 	{
 		// NOTE: probably doesn't work on negative values
 		return MathHelper.fractionalPart(val) >= 0.5 ? MathHelper.ceil(val) : MathHelper.floor(val);
+	}
+	
+	static interface LogFn
+	{
+		void call(String fmt, Object... args);
+	}
+	
+	public static <T> T logPerf(Supplier<T> fn, BiConsumer<LogFn, T> logfn)
+	{
+		final var start = System.currentTimeMillis();
+		final var res = fn.get();
+		final var end = System.currentTimeMillis();
+		logfn.accept(
+			(fmt, args) -> BadMap.LOGGER.debug(
+				String.format("perf: %s in %d ms", fmt, end - start),
+				args
+			),
+			res
+		);
+		return res;
 	}
 }

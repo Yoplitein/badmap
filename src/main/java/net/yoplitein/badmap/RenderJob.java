@@ -54,15 +54,14 @@ public class RenderJob
 		tileDir.toFile().mkdir();
 		
 		BadMap.THREADPOOL.execute(() -> {
-			var start = System.currentTimeMillis(); // FIXME: debugging
-			final var populated = discoverChunks(Arrays.asList(world.getSpawnPos())); // FIXME: this needs to be cached
-			BadMap.LOGGER.info("found {} chunks in {} ms", populated.size(), System.currentTimeMillis() - start);
-			
-			start = System.currentTimeMillis();
-			final var regions = groupRegions(populated);
-			BadMap.LOGGER.info("grouped {} chunks into {} regions in {} ms", populated.size(), regions.size(), System.currentTimeMillis() - start);
-			
-			start = System.currentTimeMillis();
+			final var populated = Utils.logPerf(
+				() -> discoverChunks(Arrays.asList(world.getSpawnPos())),
+				(log, res) -> log.call("found {} chunks", res.size())
+			); // FIXME: this needs to be cached
+			final var regions = Utils.logPerf(
+				() -> groupRegions(populated),
+				(log, res) -> log.call("grouped {} chunks into {} regions", populated.size(), res.size())
+			);
 			
 			if(!force)
 			{
@@ -72,24 +71,28 @@ public class RenderJob
 			}
 			
 			// FIXME: use futures to free up threadpool
-			for(var set: regions)
-			{
-				final var outFile = tileDir.resolve(Utils.tileFilename(set.pos)).toFile();
-				
-				BufferedImage existing = null;
-				long mtime = 0;
-				if(!force && outFile.exists())
-				{
-					existing = Utils.readPNG(outFile);
-					mtime = outFile.lastModified();
-				}
-				
-				final var img = renderRegion(existing, mtime, set);
-				Utils.writePNG(outFile, img);
-			}
-			
-			final var end = System.currentTimeMillis();
-			BadMap.LOGGER.info("rendered {} regions in {} ms", regions.size(), end - start);
+			Utils.logPerf(
+				() -> {
+					for(var set: regions)
+					{
+						final var outFile = tileDir.resolve(Utils.tileFilename(set.pos)).toFile();
+						
+						BufferedImage existing = null;
+						long mtime = 0;
+						if(!force && outFile.exists())
+						{
+							existing = Utils.readPNG(outFile);
+							mtime = outFile.lastModified();
+						}
+						
+						final var img = renderRegion(existing, mtime, set);
+						Utils.writePNG(outFile, img);
+					}
+					
+					return null;
+				},
+				(log, res) -> log.call("rendered {} regions", regions.size())
+			);
 		});
 	}
 	
@@ -196,10 +199,10 @@ public class RenderJob
 			BadMap.LOGGER.info("reusing renders for {} up to date chunks", before - chunks.size());
 		}
 		
-		final var start = System.currentTimeMillis();
-		chunks.values().forEach(pair -> renderChunk(img, regionPos, pair.main, pair.toNorth));
-		final var end = System.currentTimeMillis();
-		BadMap.LOGGER.info("rendered region ({} chunks) in {} ms", chunks.size(), end - start);
+		Utils.logPerf(
+			() -> { chunks.values().forEach(pair -> renderChunk(img, regionPos, pair.main, pair.toNorth)); return null; },
+			(log, res) -> log.call("rendered region ({} chunks)", chunks.size())
+		);
 		
 		return img;
 	}
