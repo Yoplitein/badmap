@@ -13,6 +13,8 @@ import com.mojang.brigadier.exceptions.CommandSyntaxException;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.core.LoggerContext;
+import org.apache.logging.log4j.core.layout.PatternLayout;
 
 import net.fabricmc.api.DedicatedServerModInitializer;
 import net.fabricmc.fabric.api.command.v1.CommandRegistrationCallback;
@@ -23,6 +25,7 @@ import net.minecraft.server.command.ServerCommandSource;
 public class BadMap implements DedicatedServerModInitializer
 {
 	public static final Logger LOGGER = LogManager.getLogger();
+	private static final LoggerContext logContext = (LoggerContext)LogManager.getContext(false);
 	public static final ExecutorService THREADPOOL = Executors.newFixedThreadPool(Math.max(Runtime.getRuntime().availableProcessors() - 1, 1)); // TODO: config?
 	
 	@Override
@@ -45,6 +48,17 @@ public class BadMap implements DedicatedServerModInitializer
 							.executes(ctx -> cmdRender(ctx, false))
 					)
 			);
+		});
+		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
+			final var cfg = logContext.getConfiguration();
+			final var chatAppender = ChatAppender.createAppender(server, "BMChatAppender", PatternLayout.createDefaultLayout(cfg));
+			final var loggerCfg = cfg.getLoggerConfig("net.yoplitein.badmap.BadMap");
+			
+			chatAppender.start();
+			cfg.addAppender(chatAppender);
+			loggerCfg.addAppender(chatAppender, null, null);
+			cfg.addLogger("BMChatAppender", loggerCfg);
+			logContext.updateLoggers();
 		});
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
 			LOGGER.info("shutting down render worker pool");
