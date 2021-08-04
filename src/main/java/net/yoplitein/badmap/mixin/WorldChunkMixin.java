@@ -14,26 +14,26 @@ import net.yoplitein.badmap.MtimeAccessor;
 @Mixin(WorldChunk.class)
 public abstract class WorldChunkMixin implements MtimeAccessor
 {
-    @Unique
-    private long mtime = 0;
-    
-    public long getMtime()
-    {
-        return mtime;
-    }
-    
-    public void setMtime(long mtime)
-    {
-        this.mtime = mtime;
-    }
-    
-    @Inject(method = "setBlockState", at = @At("RETURN"), require = 1)
-    public void setBlockState(BlockPos pos, BlockState newState, boolean moved, CallbackInfoReturnable<BlockState> cir)
-    {
-        final var oldState = cir.getReturnValue();
-        if(oldState == null) return; // oldState == newState
-        if(oldState.isOf(newState.getBlock())) return; // mere property changes should never change map color
-        
-        mtime = System.currentTimeMillis();
-    }
+	@Unique
+	private long mtime = 0;
+	
+	public long getMtime()
+	{
+		return mtime;
+	}
+	
+	public void setMtime(long mtime)
+	{
+		this.mtime = mtime;
+	}
+	
+	@Inject(method = "setBlockState", at = @At("RETURN"), require = 1)
+	public void setBlockState(BlockPos pos, BlockState newState, boolean moved, CallbackInfoReturnable<BlockState> cir)
+	{
+		final var oldState = cir.getReturnValue();
+		if(oldState == null) return; // oldState == newState
+		if(oldState.isOf(newState.getBlock())) return; // mere property changes should never change map color
+		
+		mtime = System.currentTimeMillis();
+	}
 }
