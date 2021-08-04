@@ -261,7 +261,7 @@ public class RenderJob
 				boolean isWater = false;
 				
 				blockPos.set(chunkPos.getStartX() + x, y, chunkPos.getStartZ() + z);
-				while(y > chunk.getBottomY())
+				while(y >= chunk.getBottomY())
 				{
 					blockPos.setY(y);
 					final var state = chunk.getBlockState(blockPos);
