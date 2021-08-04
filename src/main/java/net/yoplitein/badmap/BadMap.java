@@ -92,11 +92,11 @@ public class BadMap implements DedicatedServerModInitializer
 			final var now = System.currentTimeMillis();
 			final var ticks = tickCounter.incrementAndGet();
 			
-			if(now - lastTps.get() >= 3000)
+			if(now - lastTps.get() >= 6000)
 			{
 				lastTps.set(now);
 				tickCounter.set(0);
-				LOGGER.debug("server running at {} tps", ticks / 3);
+				LOGGER.trace("server running at {} tps", ticks / 6);
 			}
 		});
 	}
