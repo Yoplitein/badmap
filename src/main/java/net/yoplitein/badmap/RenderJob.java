@@ -61,13 +61,6 @@ public class RenderJob
 		tileDir.toFile().mkdir();
 		
 		BadMap.THREADPOOL.execute(() -> {
-			if(world.isSavingDisabled()) BadMap.LOGGER.warn("Saving is disabled! New chunks may not be properly discovered");
-			else
-			{
-				BadMap.LOGGER.info("Flushing chunks to disk, prepare yourself for lag");
-				world.save(null, true, true);
-			}
-			
 			final var populated = Utils.logPerf(
 				() -> discoverChunks(Arrays.asList(world.getSpawnPos())),
 				(log, res) -> log.call("found {} chunks", res.size())
