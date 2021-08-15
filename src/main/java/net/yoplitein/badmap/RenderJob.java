@@ -129,7 +129,7 @@ public class RenderJob
 			else
 			{
 				final var level = chunkNBT.getCompound("Level");
-				final var mtime = level.contains("bm__mtime", NbtType.LONG) ? level.getLong("bm__mtime") : 0;
+				final var mtime = level.contains("bm__mtime", NbtType.LONG) ? level.getLong("bm__mtime") : System.currentTimeMillis();
 				visited.put(coord, new ChunkInfo(coord, mtime, chunkNBT));
 			}
 			
