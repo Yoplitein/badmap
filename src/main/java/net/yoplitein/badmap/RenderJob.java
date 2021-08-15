@@ -9,6 +9,7 @@ import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.stream.Collectors;
 
 import org.jetbrains.annotations.Nullable;
@@ -22,6 +23,7 @@ import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.util.math.MathHelper;
+import net.minecraft.util.math.Vec3i;
 import net.minecraft.world.ChunkSerializer;
 import net.minecraft.world.Heightmap;
 import net.minecraft.world.chunk.Chunk;
@@ -64,41 +66,33 @@ public class RenderJob
 			final var populated = Utils.logPerf(
 				() -> discoverChunks(Arrays.asList(world.getSpawnPos())),
 				(log, res) -> log.call("found {} chunks", res.size())
-			); // FIXME: this needs to be cached
+			); // FIXME: this needs to be cached to disk (maybe class too for markers?)
 			final var regions = Utils.logPerf(
 				() -> groupRegions(populated),
 				(log, res) -> log.call("grouped {} chunks into {} regions", populated.size(), res.size())
 			);
 			
-			if(!force)
-			{
-				final int before = regions.size();
-				regions.removeIf(set -> !isRegionOutdated(tileDir, set));
-				BadMap.LOGGER.info("skipping {} up-to-date regions", before - regions.size());
-			}
-			
+			final var numRegionsRendered = new Utils.Cell<Long>(0l); // how many regions actually had any rendering to do
 			// FIXME: use futures to free up threadpool
 			Utils.logPerf(
 				() -> {
 					for(var set: regions)
 					{
 						final var outFile = tileDir.resolve(Utils.tileFilename(set.pos)).toFile();
+						BufferedImage prerendered = null;
+						if(!force && outFile.exists()) prerendered = Utils.readPNG(outFile);
 						
-						BufferedImage existing = null;
-						long mtime = 0;
-						if(!force && outFile.exists())
+						final var img = renderRegion(prerendered, outFile.lastModified(), set, force);
+						if(img != null)
 						{
-							existing = Utils.readPNG(outFile);
-							mtime = outFile.lastModified();
+							Utils.writePNG(outFile, img);
+							numRegionsRendered.val++;
 						}
-						
-						final var img = renderRegion(existing, mtime, set);
-						Utils.writePNG(outFile, img);
 					}
 					
 					return null;
 				},
-				(log, res) -> log.call("rendered {} regions", regions.size())
+				(log, res) -> log.call("rendered {} (out of {}) regions", numRegionsRendered.val, regions.size())
 			);
 		});
 	}
@@ -150,8 +144,6 @@ public class RenderJob
 				}
 		}
 		
-		// TODO: query the nulls against world in case the chunk was recently generated without saving
-		
 		visited.entrySet().removeIf(entry -> entry.getValue() == null);
 		
 		return visited.values();
@@ -183,12 +175,14 @@ public class RenderJob
 		;
 	}
 	
-	private BufferedImage renderRegion(@Nullable BufferedImage existingImg, long imageMtime, RegionSet set)
+	private @Nullable BufferedImage renderRegion(@Nullable BufferedImage prerendered, long imageMtime, RegionSet set, boolean force)
 	{
 		final var regionPos = set.pos;
-		final var img = existingImg == null ? new BufferedImage(512, 512, BufferedImage.TYPE_4BYTE_ABGR) : existingImg;
 		
-		final var allChunks = parseChunks(set);
+		final var allChunks = Utils.logPerf(
+			() -> parseChunks(set),
+			(log, res) -> log.call("parsed {} chunks", res.size())
+		);
 		final var chunks = allChunks
 			.entrySet()
 			.stream()
@@ -199,13 +193,19 @@ public class RenderJob
 			}))
 		;
 		
-		if(existingImg != null)
+		if(prerendered != null && !force)
 		{
-			final var before = chunks.size();
-			chunks.entrySet().removeIf(pair -> ((MtimeAccessor)pair.getValue().main).getMtime() < imageMtime);
-			BadMap.LOGGER.info("reusing renders for {} up to date chunks", before - chunks.size());
+			final var sizeBefore = chunks.size();
+			chunks.entrySet().removeIf(pair -> !isChunkOutdated(prerendered, imageMtime, regionPos, pair));
+			final var sizeNow = chunks.size();
+			
+			if(sizeNow > 0 && sizeNow != sizeBefore)
+				BadMap.LOGGER.debug("reusing renders for {} (out of {}) up to date chunks", sizeBefore - sizeNow, sizeBefore);
+			
+			if(sizeNow == 0) return null;
 		}
 		
+		final var img = prerendered != null ? prerendered : new BufferedImage(512, 512, BufferedImage.TYPE_4BYTE_ABGR);
 		Utils.logPerf(
 			() -> { chunks.values().forEach(pair -> renderChunk(img, regionPos, pair.main, pair.toNorth)); return null; },
 			(log, res) -> log.call("rendered region ({} chunks)", chunks.size())
@@ -246,12 +246,10 @@ public class RenderJob
 	private void renderChunk(BufferedImage regionImage, RegionPos regionPos, Chunk chunk, @Nullable Chunk toNorth)
 	{
 		final var chunkPos = chunk.getPos();
+		final var pixelOffset = getPixelOffset(regionPos, chunkPos);
+		
 		final var heightmap = chunk.getHeightmap(Heightmap.Type.WORLD_SURFACE);
 		final var toNorthHeightmap = toNorth == null ? null : toNorth.getHeightmap(Heightmap.Type.WORLD_SURFACE);
-		
-		final var posInRegion = regionPos.chunkPosInRegion(chunkPos);
-		final var offsetX = 16 * (posInRegion.x < 0 ? (32 - Math.abs(posInRegion.x)) : posInRegion.x);
-		final var offsetZ = 16 * (posInRegion.z < 0 ? (32 - Math.abs(posInRegion.z)) : posInRegion.z);
 		
 		final var blockPos = new BlockPos.Mutable();
 		for(int x = 0; x < 16; x++)
@@ -328,28 +326,34 @@ public class RenderJob
 						0.25 // TODO: vary blend strength with water depth, maybe expand maxSearch to 30-60?
 					).toABGR();
 				
-				regionImage.setRGB(offsetX + x, offsetZ + z, finalColor);
+				regionImage.setRGB(pixelOffset.getX() + x, pixelOffset.getY() + z, finalColor);
 				prevHeight = waterTop;
 			}
 		}
 	}
 	
-	private static boolean isRegionOutdated(Path tileDir, RegionSet set)
+	private boolean isChunkOutdated(BufferedImage prerendered, long imageMtime, RegionPos regionPos, Entry<ChunkPos, ChunkPair> pair)
 	{
-		final var pos = set.pos;
-		final var tile = tileDir.resolve(Utils.tileFilename(pos)).toFile();
-		if(!tile.exists()) return true;
+		final var chunk = pair.getValue().main;
+		final var chunkPos = pair.getKey();
+		final var pixelOffset = getPixelOffset(regionPos, chunkPos);
 		
-		final var newestChunk = set
-			.populatedChunks
-			.stream()
-			.map(info -> info.mtime)
-			.max(Long::compare)
-			.orElseThrow()
-		;
-		if(tile.lastModified() < newestChunk) return true;
+		// if there is transparency at this chunk's origin, it has not been rendered yet.
+		// this fixes unrendered chunks being skipped (until a block change) if they were
+		// generated just before or during a render, and before the world was flushed to disk.
+		// (happens because their mtime is then older than a render where they had not been included)
+		if((prerendered.getRGB(pixelOffset.getX(), pixelOffset.getY()) & 0xFF000000) >>> 24 < 0xFF)
+			return true;
 		
-		return false;
+		return ((MtimeAccessor)chunk).getMtime() >= imageMtime;
+	}
+	
+	private static Vec3i getPixelOffset(RegionPos regionPos, ChunkPos chunkPos)
+	{
+		final var posInRegion = regionPos.chunkPosInRegion(chunkPos);
+		final var offsetX = 16 * (posInRegion.x < 0 ? (32 - Math.abs(posInRegion.x)) : posInRegion.x);
+		final var offsetZ = 16 * (posInRegion.z < 0 ? (32 - Math.abs(posInRegion.z)) : posInRegion.z);
+		return new Vec3i(offsetX, offsetZ, 0); // no vec2i -_-
 	}
 	
 	static record ChunkPair(Chunk main, @Nullable Chunk toNorth) {}
