@@ -9,7 +9,6 @@ import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.stream.Collectors;
 
 import org.jetbrains.annotations.Nullable;
@@ -177,6 +176,19 @@ public class RenderJob
 	{
 		final var regionPos = set.pos;
 		
+		if(prerendered != null && incremental)
+		{
+			final var populated = set.populatedChunks;
+			final var sizeBefore = populated.size();
+			populated.removeIf(info -> !isChunkOutdated(prerendered, imageMtime, regionPos, info));
+			final var sizeNow = populated.size();
+			
+			if(sizeNow > 0 && sizeNow != sizeBefore)
+				BadMap.LOGGER.debug("reusing renders for {} (out of {}) up to date chunks", sizeBefore - sizeNow, sizeBefore);
+			
+			if(sizeNow == 0) return null;
+		}
+		
 		final var allChunks = Utils.logPerf(
 			() -> parseChunks(set),
 			(log, res) -> log.call("parsed {} chunks", res.size())
@@ -190,18 +202,6 @@ public class RenderJob
 				return new ChunkPair(pair.getValue(), allChunks.getOrDefault(north, null));
 			}))
 		;
-		
-		if(prerendered != null && incremental)
-		{
-			final var sizeBefore = chunks.size();
-			chunks.entrySet().removeIf(pair -> !isChunkOutdated(prerendered, imageMtime, regionPos, pair));
-			final var sizeNow = chunks.size();
-			
-			if(sizeNow > 0 && sizeNow != sizeBefore)
-				BadMap.LOGGER.debug("reusing renders for {} (out of {}) up to date chunks", sizeBefore - sizeNow, sizeBefore);
-			
-			if(sizeNow == 0) return null;
-		}
 		
 		final var img = prerendered != null ? prerendered : new BufferedImage(512, 512, BufferedImage.TYPE_4BYTE_ABGR);
 		Utils.logPerf(
@@ -329,11 +329,9 @@ public class RenderJob
 		}
 	}
 	
-	private boolean isChunkOutdated(BufferedImage prerendered, long imageMtime, RegionPos regionPos, Entry<ChunkPos, ChunkPair> pair)
+	private boolean isChunkOutdated(BufferedImage prerendered, long imageMtime, RegionPos regionPos, ChunkInfo info)
 	{
-		final var chunk = pair.getValue().main;
-		final var chunkPos = pair.getKey();
-		final var pixelOffset = getPixelOffset(regionPos, chunkPos);
+		final var pixelOffset = getPixelOffset(regionPos, info.pos);
 		
 		// if there is transparency at this chunk's origin, it has not been rendered yet.
 		// this fixes unrendered chunks being skipped (until a block change) if they were
@@ -344,7 +342,7 @@ public class RenderJob
 			if((color & 0xFFFFFF) != TRANSPARENCY_SENTINEL) // check if chunk *has* been rendered, but it's devoid of blocks
 				return true;
 		
-		return ((MtimeAccessor)chunk).getMtime() >= imageMtime;
+		return info.mtime >= imageMtime;
 	}
 	
 	private static Vec3i getPixelOffset(RegionPos regionPos, ChunkPos chunkPos)
