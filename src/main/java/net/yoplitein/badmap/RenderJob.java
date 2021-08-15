@@ -51,7 +51,7 @@ public class RenderJob
 		this.chunkManager = this.world.getChunkManager();
 	}
 	
-	public void render(boolean force)
+	public void render(boolean incremental)
 	{
 		tileDir.toFile().mkdir();
 		
@@ -80,9 +80,9 @@ public class RenderJob
 					{
 						final var outFile = tileDir.resolve(Utils.tileFilename(set.pos)).toFile();
 						BufferedImage prerendered = null;
-						if(!force && outFile.exists()) prerendered = Utils.readPNG(outFile);
+						if(incremental && outFile.exists()) prerendered = Utils.readPNG(outFile);
 						
-						final var img = renderRegion(prerendered, outFile.lastModified(), set, force);
+						final var img = renderRegion(prerendered, outFile.lastModified(), set, incremental);
 						if(img != null)
 						{
 							Utils.writePNG(outFile, img);
@@ -175,7 +175,7 @@ public class RenderJob
 		;
 	}
 	
-	private @Nullable BufferedImage renderRegion(@Nullable BufferedImage prerendered, long imageMtime, RegionSet set, boolean force)
+	private @Nullable BufferedImage renderRegion(@Nullable BufferedImage prerendered, long imageMtime, RegionSet set, boolean incremental)
 	{
 		final var regionPos = set.pos;
 		
@@ -193,7 +193,7 @@ public class RenderJob
 			}))
 		;
 		
-		if(prerendered != null && !force)
+		if(prerendered != null && incremental)
 		{
 			final var sizeBefore = chunks.size();
 			chunks.entrySet().removeIf(pair -> !isChunkOutdated(prerendered, imageMtime, regionPos, pair));

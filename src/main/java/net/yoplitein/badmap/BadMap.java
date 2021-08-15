@@ -43,9 +43,9 @@ public class BadMap implements DedicatedServerModInitializer
 						literal("render")
 							.then(
 								literal("force")
-									.executes(ctx -> cmdRender(ctx, true))
+									.executes(ctx -> cmdRender(ctx, false))
 							)
-							.executes(ctx -> cmdRender(ctx, false))
+							.executes(ctx -> cmdRender(ctx, true))
 					)
 			);
 		});
@@ -117,7 +117,7 @@ public class BadMap implements DedicatedServerModInitializer
 		return 1;
 	}
 	
-	private static int cmdRender(CommandContext<ServerCommandSource> ctx, boolean force) throws CommandSyntaxException
+	private static int cmdRender(CommandContext<ServerCommandSource> ctx, boolean incremental) throws CommandSyntaxException
 	{
 		final var src = ctx.getSource();
 		final var server = src.getMinecraftServer();
@@ -126,7 +126,7 @@ public class BadMap implements DedicatedServerModInitializer
 		bmapDir.mkdir();
 		
 		final var job = new RenderJob(bmapDir.toPath(), server);
-		job.render(force);
+		job.render(incremental);
 		
 		return 1;
 	}
