@@ -58,6 +58,16 @@ public class Utils
 		}
 	}
 	
+	// Container for a mutable T.
+	// Comes in handy for lambdas, when you need to mutate non-local variables.
+	// (as all variables captured by a lambda must be final, but it's not transitive)
+	public static class Cell<T>
+	{
+		public T val;
+		Cell(T val) { this.val = val; }
+	}
+
+	
 	public static String tileFilename(RegionPos pos)
 	{
 		return String.format("%d_%d.png", pos.x, pos.z);
