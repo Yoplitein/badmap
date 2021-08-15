@@ -35,7 +35,12 @@ import net.yoplitein.badmap.Utils.RegionPos;
 
 public class RenderJob
 {
-	static final int[] ORDERED_SHADES = {2, 1, 0, 3}; // lightest to darkest
+	static final int[] ORDERED_SHADES = {2, 1, 0, 3}; // map color shades, lightest to darkest
+	
+	// guard value used when a transparent pixel is rendered (i.e. block column is entirely air)
+	// as opposed to transparency in chunks that have yet to be rendered (unwritten pixels are black)
+	static final int TRANSPARENCY_SENTINEL = 0xFF00FF;
+	
 	final Path bmapDir;
 	final Path tileDir;
 	final MinecraftServer server;
@@ -313,10 +318,9 @@ public class RenderJob
 					shade = ORDERED_SHADES[3 - val];
 				}
 				
-				
 				int finalColor;
-				if(color == MapColor.CLEAR) // set transparent on void
-					finalColor = 0;
+				if(color == MapColor.CLEAR) // set (tagged) transparent if this block column is entirely air
+					finalColor = TRANSPARENCY_SENTINEL;
 				else if(blendColor == null) // fast path when not blending
 					finalColor = Utils.getMapColor(color, shade).toABGR();
 				else
@@ -342,8 +346,10 @@ public class RenderJob
 		// this fixes unrendered chunks being skipped (until a block change) if they were
 		// generated just before or during a render, and before the world was flushed to disk.
 		// (happens because their mtime is then older than a render where they had not been included)
-		if((prerendered.getRGB(pixelOffset.getX(), pixelOffset.getY()) & 0xFF000000) >>> 24 < 0xFF)
-			return true;
+		final var color = prerendered.getRGB(pixelOffset.getX(), pixelOffset.getY());
+		if((color & 0xFF000000) >>> 24 < 0xFF)
+			if((color & 0xFFFFFF) != TRANSPARENCY_SENTINEL) // check if chunk *has* been rendered, but it's devoid of blocks
+				return true;
 		
 		return ((MtimeAccessor)chunk).getMtime() >= imageMtime;
 	}

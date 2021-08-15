@@ -66,7 +66,6 @@ public class Utils
 		public T val;
 		Cell(T val) { this.val = val; }
 	}
-
 	
 	public static String tileFilename(RegionPos pos)
 	{
