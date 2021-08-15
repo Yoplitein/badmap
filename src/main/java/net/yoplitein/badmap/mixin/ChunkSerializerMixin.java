@@ -47,6 +47,12 @@ public class ChunkSerializerMixin
 		final var level = nbt.getCompound("Level");
 		
 		final var mtime = level.contains("bm__mtime", NbtType.LONG) ? level.getLong("bm__mtime") : System.currentTimeMillis();
+		if(!level.contains("bm__mtime", NbtType.LONG))
+		{
+			level.putLong("bm__mtime", mtime);
+			world.getChunkManager().threadedAnvilChunkStorage.setNbt(chunk.getPos(), nbt);
+		}
+		
 		((MtimeAccessor)chunk).setMtime(mtime);
 	}
 	
