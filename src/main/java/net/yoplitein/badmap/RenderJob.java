@@ -1,9 +1,7 @@
 package net.yoplitein.badmap;
 
 import java.awt.image.BufferedImage;
-import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedList;
@@ -40,16 +38,12 @@ public class RenderJob
 	// as opposed to transparency in chunks that have yet to be rendered (unwritten pixels are black)
 	static final int TRANSPARENCY_SENTINEL = 0xFF00FF;
 	
-	final Path bmapDir;
-	final Path tileDir;
 	final MinecraftServer server;
 	final ServerWorld world;
 	final ServerChunkManager chunkManager;
 	
-	public RenderJob(Path bmapDir, MinecraftServer server)
+	public RenderJob(MinecraftServer server)
 	{
-		this.bmapDir = bmapDir;
-		this.tileDir = bmapDir.resolve("tiles"); // TODO: config
 		this.server = server;
 		this.world = server.getOverworld();
 		this.chunkManager = this.world.getChunkManager();
@@ -57,11 +51,9 @@ public class RenderJob
 	
 	public void render(boolean incremental)
 	{
-		tileDir.toFile().mkdir();
-		
 		BadMap.THREADPOOL.execute(() -> {
 			final var populated = Utils.logPerf(
-				() -> discoverChunks(Arrays.asList(world.getSpawnPos())),
+				() -> discoverChunks(),
 				(log, res) -> log.call("found {} chunks", res.size())
 			); // FIXME: this needs to be cached to disk (maybe class too for markers?)
 			final var regions = Utils.logPerf(
@@ -75,7 +67,7 @@ public class RenderJob
 				() -> {
 					for(var set: regions)
 					{
-						final var outFile = tileDir.resolve(Utils.tileFilename(set.pos)).toFile();
+						final var outFile = BadMap.CONFIG.tileDir.resolve(Utils.tileFilename(set.pos)).toFile();
 						BufferedImage prerendered = null;
 						if(incremental && outFile.exists()) prerendered = Utils.readPNG(outFile);
 						
@@ -94,7 +86,7 @@ public class RenderJob
 		});
 	}
 	
-	private Collection<ChunkInfo> discoverChunks(List<BlockPos> seeds)
+	private Collection<ChunkInfo> discoverChunks()
 	{
 		final var searchRadius = 4;
 		final var anvil = chunkManager.threadedAnvilChunkStorage;
@@ -102,7 +94,9 @@ public class RenderJob
 		final var queue = new LinkedList<ChunkPos>();
 		ChunkPos coord;
 		
-		seeds.forEach(pos -> queue.add(new ChunkPos(pos)));
+		final var seeds = BadMap.CONFIG.discoverySeeds;
+		if(seeds.isEmpty()) queue.add(new ChunkPos(world.getSpawnPos()));
+		else seeds.forEach(pos -> queue.add(new ChunkPos(pos)));
 		
 		while((coord = queue.poll()) != null)
 		{

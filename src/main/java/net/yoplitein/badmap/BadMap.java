@@ -1,9 +1,7 @@
 package net.yoplitein.badmap;
 
-import static net.minecraft.server.command.CommandManager.literal;
-
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -20,29 +18,45 @@ import net.fabricmc.api.DedicatedServerModInitializer;
 import net.fabricmc.fabric.api.command.v1.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 
 public class BadMap implements DedicatedServerModInitializer
 {
 	public static final Logger LOGGER = LogManager.getLogger();
 	private static final LoggerContext logContext = (LoggerContext)LogManager.getContext(false);
-	public static final ExecutorService THREADPOOL = Executors.newFixedThreadPool(Math.max(Runtime.getRuntime().availableProcessors() - 1, 1)); // TODO: config?
+	
+	public static ModConfig CONFIG;
+	
+	private static final ThreadGroup workers = new ThreadGroup("BadMap render pool");
+	private static final Utils.Cell<Integer> workerCounter = new Utils.Cell<>(0);
+	public static final ThreadPoolExecutor THREADPOOL = new ThreadPoolExecutor(
+		0, 1, // start with 0 core size to ensure no threads are spawned until config is loaded
+		0, TimeUnit.DAYS,
+		new LinkedBlockingQueue<Runnable>(),
+		runnable -> {
+			final var thread = new Thread(workers, runnable, "BM-pool-%d".formatted(workerCounter.val++));
+			thread.setPriority(CONFIG.workerThreadPriority);
+			return thread;
+		}
+	);
 	
 	@Override
 	public void onInitializeServer()
 	{
 		CommandRegistrationCallback.EVENT.register((dispatcher, dedicated) -> {
 			dispatcher.register(
-				literal("bm") // TODO: add as alias of badmap
+				CommandManager.literal("bm") // TODO: add as alias of badmap
 					.requires(executor -> executor.hasPermissionLevel(4))
 					.then(
-						literal("test")
+						CommandManager.literal("test")
 							.executes(BadMap::cmdTest)
 					)
 					.then(
-						literal("render")
+						CommandManager.literal("render")
 							.then(
-								literal("force")
+								CommandManager.literal("force")
 									.executes(ctx -> cmdRender(ctx, false))
 							)
 							.executes(ctx -> cmdRender(ctx, true))
@@ -50,15 +64,10 @@ public class BadMap implements DedicatedServerModInitializer
 			);
 		});
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
-			final var cfg = logContext.getConfiguration();
-			final var chatAppender = ChatAppender.createAppender(server, "BMChatAppender", PatternLayout.createDefaultLayout(cfg));
-			final var loggerCfg = cfg.getLoggerConfig("net.yoplitein.badmap.BadMap");
+			CONFIG = ModConfig.loadConfig(server);
+			onConfigReloaded(server);
 			
-			chatAppender.start();
-			cfg.addAppender(chatAppender);
-			loggerCfg.addAppender(chatAppender, null, null);
-			cfg.addLogger("BMChatAppender", loggerCfg);
-			logContext.updateLoggers();
+			setupChatAppender(server);
 		});
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
 			LOGGER.info("shutting down render worker pool");
@@ -101,6 +110,36 @@ public class BadMap implements DedicatedServerModInitializer
 		});
 	}
 	
+	private static void setupChatAppender(MinecraftServer server)
+	{
+		final var cfg = logContext.getConfiguration();
+		final var chatAppender = ChatAppender.createAppender(server, "BMChatAppender", PatternLayout.createDefaultLayout(cfg));
+		final var loggerCfg = cfg.getLoggerConfig("net.yoplitein.badmap.BadMap");
+		
+		chatAppender.start();
+		cfg.addAppender(chatAppender);
+		loggerCfg.addAppender(chatAppender, null, null);
+		cfg.addLogger("BMChatAppender", loggerCfg);
+		logContext.updateLoggers();
+	}
+	
+	private void onConfigReloaded(MinecraftServer server)
+	{
+		var workerThreads = CONFIG.maxWorkerThreads;
+		if(workerThreads <= 0) workerThreads = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
+		LOGGER.info("spawning {} worker threads", workerThreads);
+		THREADPOOL.setMaximumPoolSize(workerThreads);
+		// without this, new threads are never spun up due to dumb executor semantics around the workqueue
+		THREADPOOL.setCorePoolSize(workerThreads);
+		
+		LOGGER.info("setting priority of existing threads to {}", CONFIG.workerThreadPriority);
+		var threads = new Thread[workers.activeCount()];
+		workers.enumerate(threads);
+		for(var thread: threads) thread.setPriority(CONFIG.workerThreadPriority);
+		
+		LOGGER.info("config successfully reloaded");
+	}
+	
 	private static int cmdTest(CommandContext<ServerCommandSource> ctx) throws CommandSyntaxException
 	{
 		/* THREADPOOL.execute(() -> {
@@ -122,10 +161,7 @@ public class BadMap implements DedicatedServerModInitializer
 		final var src = ctx.getSource();
 		final var server = src.getMinecraftServer();
 		
-		final var bmapDir = server.getRunDirectory().toPath().resolve("bmap").toFile(); // TODO: config
-		bmapDir.mkdir();
-		
-		final var job = new RenderJob(bmapDir.toPath(), server);
+		final var job = new RenderJob(server);
 		job.render(incremental);
 		
 		return 1;
