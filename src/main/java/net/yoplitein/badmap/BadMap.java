@@ -46,8 +46,8 @@ public class BadMap implements DedicatedServerModInitializer
 	public void onInitializeServer()
 	{
 		CommandRegistrationCallback.EVENT.register((dispatcher, dedicated) -> {
-			dispatcher.register(
-				CommandManager.literal("bm") // TODO: add as alias of badmap
+			final var root = dispatcher.register(
+				CommandManager.literal("badmap")
 					.requires(executor -> executor.hasPermissionLevel(4))
 					.then(
 						CommandManager.literal("test")
@@ -68,6 +68,10 @@ public class BadMap implements DedicatedServerModInitializer
 							)
 							.executes(ctx -> cmdRender(ctx, true))
 					)
+			);
+			dispatcher.register(
+				CommandManager.literal("bm")
+					.redirect(root)
 			);
 		});
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
