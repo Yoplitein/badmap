@@ -54,6 +54,13 @@ public class BadMap implements DedicatedServerModInitializer
 							.executes(BadMap::cmdTest)
 					)
 					.then(
+						CommandManager.literal("config")
+							.then(
+								CommandManager.literal("reload")
+									.executes(BadMap::cmdCfgReload)
+							)
+					)
+					.then(
 						CommandManager.literal("render")
 							.then(
 								CommandManager.literal("force")
@@ -123,7 +130,7 @@ public class BadMap implements DedicatedServerModInitializer
 		logContext.updateLoggers();
 	}
 	
-	private void onConfigReloaded(MinecraftServer server)
+	private static void onConfigReloaded(MinecraftServer server)
 	{
 		var workerThreads = CONFIG.maxWorkerThreads;
 		if(workerThreads <= 0) workerThreads = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
@@ -152,6 +159,17 @@ public class BadMap implements DedicatedServerModInitializer
 			final var end = System.currentTimeMillis();
 			LOGGER.info("found {} chunks in {} ms", chunks.size(), end - start);
 		}); */
+		
+		return 1;
+	}
+	
+	private static int cmdCfgReload(CommandContext<ServerCommandSource> ctx) throws CommandSyntaxException
+	{
+		final var src = ctx.getSource();
+		final var server = src.getMinecraftServer();
+		
+		CONFIG = ModConfig.loadConfig(server);
+		onConfigReloaded(server);
 		
 		return 1;
 	}
