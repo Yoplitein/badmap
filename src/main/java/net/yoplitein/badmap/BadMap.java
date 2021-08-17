@@ -75,7 +75,7 @@ public class BadMap implements DedicatedServerModInitializer
 			);
 		});
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
-			CONFIG = ModConfig.loadConfig(server);
+			CONFIG = ModConfig.loadConfig();
 			onConfigReloaded(server);
 			
 			setupChatAppender(server);
@@ -172,7 +172,7 @@ public class BadMap implements DedicatedServerModInitializer
 		final var src = ctx.getSource();
 		final var server = src.getMinecraftServer();
 		
-		CONFIG = ModConfig.loadConfig(server);
+		CONFIG = ModConfig.loadConfig();
 		onConfigReloaded(server);
 		
 		return 1;

@@ -28,6 +28,7 @@ import net.minecraft.util.math.BlockPos;
 
 public class ModConfig
 {
+	private static String CONFIG_NAME = "bmap.json";
 	private static final Gson gson = new GsonBuilder()
 		.setLenient()
 		.setPrettyPrinting()
@@ -56,10 +57,11 @@ public class ModConfig
 	
 	public ModConfig() {}
 	
-	public static ModConfig loadConfig(MinecraftServer server)
+	public static ModConfig loadConfig()
 	{
-		final var configDir = FabricLoader.getInstance().getConfigDir();
-		final var configFile = configDir.resolve("bmap.json").toFile();
+		final var fabric = FabricLoader.getInstance();
+		final var configDir = fabric.getConfigDir();
+		final var configFile = configDir.resolve(CONFIG_NAME).toFile();
 		final var exists = configFile.exists();
 		
 		if(exists)
@@ -74,12 +76,12 @@ public class ModConfig
 		}
 		
 		BadMap.LOGGER.warn("loading default configuration");
-		final var defaultCfg = getDefaultConfig(server.getRunDirectory().toPath());
+		final var defaultCfg = getDefaultConfig(fabric.getGameDir());
 		
 		if(!exists)
 		{
 			BadMap.LOGGER.info("saving default configuration");
-			try { defaultCfg.saveConfig(configFile); }
+			try { defaultCfg.saveConfig(); }
 			catch(Exception err) { BadMap.LOGGER.error("failed to write default configuration", err); }
 		}
 		
@@ -129,8 +131,10 @@ public class ModConfig
 		return gson.fromJson(json, ModConfig.class);
 	}
 	
-	public void saveConfig(File file) throws IOException
+	public void saveConfig() throws IOException
 	{
+		final var configDir = FabricLoader.getInstance().getConfigDir();
+		final var file = configDir.resolve(CONFIG_NAME).toFile();
 		final var json = gson.toJson(this);
 		FileUtils.writeStringToFile(file, json, StandardCharsets.UTF_8);
 	}
