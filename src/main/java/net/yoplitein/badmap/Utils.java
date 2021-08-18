@@ -2,12 +2,23 @@ package net.yoplitein.badmap;
 
 import java.awt.image.BufferedImage;
 import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.function.BiConsumer;
 import java.util.function.Supplier;
 
 import javax.imageio.ImageIO;
 
 import net.minecraft.block.MapColor;
+import net.minecraft.text.ClickEvent;
+import net.minecraft.text.HoverEvent;
+import net.minecraft.text.LiteralText;
+import net.minecraft.text.MutableText;
+import net.minecraft.text.Text;
+import net.minecraft.text.Texts;
+import net.minecraft.text.TranslatableText;
+import net.minecraft.util.Formatting;
+import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.util.math.MathHelper;
 
@@ -134,5 +145,48 @@ public class Utils
 			res
 		);
 		return res;
+	}
+	
+	public static List<MutableText> getLocationTexts(List<BlockPos> locs, boolean withChunkPos)
+	{
+		final var result = new ArrayList<MutableText>(locs.size());
+		
+		for(var pos: locs)
+		{
+			var text = Texts.bracketed(
+				new TranslatableText(
+					"chat.coordinates",
+					pos.getX(), pos.getY(), pos.getZ()
+				)
+			).styled(style -> {
+				return style
+					.withColor(Formatting.GREEN)
+					.withClickEvent(new ClickEvent(
+						ClickEvent.Action.SUGGEST_COMMAND,
+						"/tp @s %s %s %s".formatted(
+							pos.getX(), pos.getY(), pos.getZ()
+						)
+					))
+					.withHoverEvent(new HoverEvent(
+						HoverEvent.Action.SHOW_TEXT,
+						new TranslatableText("chat.coordinates.tooltip")
+					))
+				;
+			});
+			
+			if(withChunkPos)
+				text = LiteralText.EMPTY
+					.copy()
+					.append(text)
+					.append(Text.of(" (chunk [%d,%d])".formatted(
+						pos.getX() >> 4,
+						pos.getZ() >> 4
+					)))
+				;
+				
+			result.add(text);
+		}
+		
+		return result;
 	}
 }

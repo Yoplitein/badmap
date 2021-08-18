@@ -1,5 +1,6 @@
 package net.yoplitein.badmap;
 
+import java.util.List;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -18,9 +19,15 @@ import net.fabricmc.api.DedicatedServerModInitializer;
 import net.fabricmc.fabric.api.command.v1.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.minecraft.command.argument.BlockPosArgumentType;
+import net.minecraft.command.argument.DefaultPosArgument;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
+import net.minecraft.text.LiteralText;
+import net.minecraft.text.Texts;
+import net.minecraft.util.Formatting;
+import net.minecraft.util.math.BlockPos;
 
 public class BadMap implements DedicatedServerModInitializer
 {
@@ -58,6 +65,21 @@ public class BadMap implements DedicatedServerModInitializer
 							.then(
 								CommandManager.literal("reload")
 									.executes(BadMap::cmdCfgReload)
+							)
+							.then(
+								CommandManager.literal("seeds")
+									.then(
+										CommandManager.literal("list")
+											.executes(BadMap::cmdSeedsList)
+									)
+									.then(
+										CommandManager.literal("add")
+											.then(
+												CommandManager.argument("pos", BlockPosArgumentType.blockPos())
+													.executes(BadMap::cmdSeedsAdd)
+											)
+											.executes(BadMap::cmdSeedsAdd)
+									)
 							)
 					)
 					.then(
@@ -174,6 +196,51 @@ public class BadMap implements DedicatedServerModInitializer
 		
 		CONFIG = ModConfig.loadConfig();
 		onConfigReloaded(server);
+		
+		return 1;
+	}
+	
+	private static int cmdSeedsList(CommandContext<ServerCommandSource> ctx) throws CommandSyntaxException
+	{
+		final var src = ctx.getSource();
+		final var server = src.getMinecraftServer();
+		
+		final var seeds = CONFIG.discoverySeeds;
+		final var customSeeds = !seeds.isEmpty();
+		final var texts = Utils.getLocationTexts(
+			customSeeds ? seeds : List.of(server.getOverworld().getSpawnPos()),
+			true
+		);
+		if(customSeeds)
+			src.sendFeedback(Texts.join(texts, new LiteralText(", ")), false);
+		else
+		{
+			final var text = LiteralText.EMPTY.copy().append(texts.get(0));
+			text.append(
+				new LiteralText(" (default seed)")
+					.formatted(Formatting.GRAY, Formatting.ITALIC)
+			);
+			src.sendFeedback(text, false);
+		}
+		
+		return 1;
+	}
+	
+	private static int cmdSeedsAdd(CommandContext<ServerCommandSource> ctx) throws CommandSyntaxException
+	{
+		final var src = ctx.getSource();
+		
+		BlockPos pos;
+		try { pos = new BlockPos(ctx.getArgument("pos", DefaultPosArgument.class).toAbsolutePos(src)); }
+		catch(IllegalArgumentException err) { pos = src.getPlayer().getBlockPos(); }
+		
+		final var locText = Utils.getLocationTexts(List.of(pos), true).get(0);
+		final var text = new LiteralText("Adding new seed at ").append(locText);
+		
+		src.sendFeedback(text, false);
+		CONFIG.discoverySeeds.add(pos);
+		try { CONFIG.saveConfig(); }
+		catch(Exception err) { LOGGER.error("failed to save config after adding new seed", err); }
 		
 		return 1;
 	}
