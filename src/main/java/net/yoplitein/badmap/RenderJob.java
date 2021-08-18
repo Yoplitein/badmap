@@ -52,37 +52,35 @@ public class RenderJob
 	public void render(boolean incremental)
 	{
 		BadMap.THREADPOOL.execute(() -> {
-			final var populated = Utils.logPerf(
-				() -> discoverChunks(),
-				(log, res) -> log.call("found {} chunks", res.size())
-			); // FIXME: this needs to be cached to disk (maybe class too for markers?)
-			final var regions = Utils.logPerf(
-				() -> groupRegions(populated),
-				(log, res) -> log.call("grouped {} chunks into {} regions", populated.size(), res.size())
-			);
+			final var benchmark = new Utils.Benchmark();
+			
+			benchmark.start();
+			final var populated = discoverChunks(); // FIXME: this needs to be cached to disk (maybe class too for markers?)
+			benchmark.end();
+			BadMap.LOGGER.debug("perf: found {} chunks in {}ms", populated.size(), benchmark.msecs());
+			
+			benchmark.start();
+			final var regions = groupRegions(populated);
+			benchmark.end();
+			BadMap.LOGGER.debug("perf: grouped {} chunks into {} regions in {}ms", populated.size(), regions.size(), benchmark.msecs());
 			
 			final var numRegionsRendered = new Utils.Cell<Long>(0l); // how many regions actually had any rendering to do
-			// FIXME: use futures to free up threadpool
-			Utils.logPerf(
-				() -> {
-					for(var set: regions)
-					{
-						final var outFile = BadMap.CONFIG.tileDir.resolve(Utils.tileFilename(set.pos)).toFile();
-						BufferedImage prerendered = null;
-						if(incremental && outFile.exists()) prerendered = Utils.readPNG(outFile);
-						
-						final var img = renderRegion(prerendered, outFile.lastModified(), set, incremental);
-						if(img != null)
-						{
-							Utils.writePNG(outFile, img);
-							numRegionsRendered.val++;
-						}
-					}
-					
-					return null;
-				},
-				(log, res) -> log.call("rendered {} (out of {}) regions", numRegionsRendered.val, regions.size())
-			);
+			benchmark.start();
+			for(var set: regions) // FIXME: use futures to free up threadpool
+			{
+				final var outFile = BadMap.CONFIG.tileDir.resolve(Utils.tileFilename(set.pos)).toFile();
+				BufferedImage prerendered = null;
+				if(incremental && outFile.exists()) prerendered = Utils.readPNG(outFile);
+				
+				final var img = renderRegion(prerendered, outFile.lastModified(), set, incremental);
+				if(img != null)
+				{
+					Utils.writePNG(outFile, img);
+					numRegionsRendered.val++;
+				}
+			}
+			benchmark.end();
+			BadMap.LOGGER.debug("perf: rendered {} (out of {}) regions in {}ms", numRegionsRendered.val, regions.size(), benchmark.msecs());
 		});
 	}
 	
@@ -168,6 +166,7 @@ public class RenderJob
 	
 	private @Nullable BufferedImage renderRegion(@Nullable BufferedImage prerendered, long imageMtime, RegionSet set, boolean incremental)
 	{
+		final var benchmark = new Utils.Benchmark();
 		final var regionPos = set.pos;
 		
 		if(prerendered != null && incremental)
@@ -183,10 +182,11 @@ public class RenderJob
 			if(sizeNow == 0) return null;
 		}
 		
-		final var allChunks = Utils.logPerf(
-			() -> parseChunks(set),
-			(log, res) -> log.call("parsed {} chunks", res.size())
-		);
+		benchmark.start();
+		final var allChunks = parseChunks(set);
+		benchmark.end();
+		BadMap.LOGGER.debug("perf: parsed {} chunks in {}ms", allChunks.size(), benchmark.msecs());
+		
 		final var chunks = allChunks
 			.entrySet()
 			.stream()
@@ -198,10 +198,11 @@ public class RenderJob
 		;
 		
 		final var img = prerendered != null ? prerendered : new BufferedImage(512, 512, BufferedImage.TYPE_4BYTE_ABGR);
-		Utils.logPerf(
-			() -> { chunks.values().forEach(pair -> renderChunk(img, regionPos, pair.main, pair.toNorth)); return null; },
-			(log, res) -> log.call("rendered region ({} chunks)", chunks.size())
-		);
+		
+		benchmark.start();
+		chunks.values().forEach(pair -> renderChunk(img, regionPos, pair.main, pair.toNorth));
+		benchmark.end();
+		BadMap.LOGGER.debug("perf: rendered region ({} chunks) in {}ms", chunks.size(), benchmark.msecs());
 		
 		return img;
 	}

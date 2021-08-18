@@ -252,6 +252,7 @@ public class BadMap implements DedicatedServerModInitializer
 		
 		final var job = new RenderJob(server);
 		job.render(incremental);
+		LOGGER.info("Starting {} render", incremental ? "incremental" : "full");
 		
 		return 1;
 	}

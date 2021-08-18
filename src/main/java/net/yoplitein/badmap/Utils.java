@@ -76,6 +76,17 @@ public class Utils
 		Cell(T val) { this.val = val; }
 	}
 	
+	public static class Benchmark
+	{
+		long startTime = 0;
+		long endTime = 0;
+		
+		public Benchmark() {}
+		void start() { startTime = System.currentTimeMillis(); }
+		void end() { endTime = System.currentTimeMillis(); }
+		long msecs() { return endTime - startTime; }
+	}
+	
 	public static String tileFilename(RegionPos pos)
 	{
 		return String.format("%d_%d.png", pos.x, pos.z);
@@ -123,26 +134,6 @@ public class Utils
 	{
 		// NOTE: probably doesn't work on negative values
 		return MathHelper.fractionalPart(val) >= 0.5 ? MathHelper.ceil(val) : MathHelper.floor(val);
-	}
-	
-	static interface LogFn
-	{
-		void call(String fmt, Object... args);
-	}
-	
-	public static <T> T logPerf(Supplier<T> fn, BiConsumer<LogFn, T> logfn)
-	{
-		final var start = System.currentTimeMillis();
-		final var res = fn.get();
-		final var end = System.currentTimeMillis();
-		logfn.accept(
-			(fmt, args) -> BadMap.LOGGER.debug(
-				String.format("perf: %s in %d ms", fmt, end - start),
-				args
-			),
-			res
-		);
-		return res;
 	}
 	
 	public static List<MutableText> getLocationTexts(List<BlockPos> locs, boolean withChunkPos)
