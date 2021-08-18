@@ -23,7 +23,6 @@ import com.google.gson.annotations.SerializedName;
 import org.apache.commons.io.FileUtils;
 
 import net.fabricmc.loader.api.FabricLoader;
-import net.minecraft.server.MinecraftServer;
 import net.minecraft.util.math.BlockPos;
 
 public class ModConfig

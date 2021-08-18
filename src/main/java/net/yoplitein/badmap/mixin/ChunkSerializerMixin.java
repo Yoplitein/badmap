@@ -30,6 +30,7 @@ public class ChunkSerializerMixin
 	private static final Logger LOGGER = LogManager.getLogger();
 	
 	@Inject(method = "deserialize", at = @At(value = "RETURN", ordinal = 0), require = 1, allow = 1)
+	@SuppressWarnings({"resource"})
 	private static void deserialize(ServerWorld world, StructureManager structureManager, PointOfInterestStorage poiStorage, ChunkPos pos, NbtCompound nbt, CallbackInfoReturnable<ProtoChunk> cir)
 	{
 		final var protoChunk = cir.getReturnValue();
