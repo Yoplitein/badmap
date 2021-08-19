@@ -160,12 +160,12 @@ public class BadMap implements DedicatedServerModInitializer
 	{
 		var workerThreads = CONFIG.maxWorkerThreads;
 		if(workerThreads <= 0) workerThreads = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
-		LOGGER.info("spawning {} worker threads", workerThreads);
+		LOGGER.debug("spawning {} worker threads", workerThreads);
 		THREADPOOL.setMaximumPoolSize(workerThreads);
 		// without this, new threads are never spun up due to dumb executor semantics around the workqueue
 		THREADPOOL.setCorePoolSize(workerThreads);
 		
-		LOGGER.info("setting priority of existing threads to {}", CONFIG.workerThreadPriority);
+		LOGGER.debug("setting priority of existing threads to {}", CONFIG.workerThreadPriority);
 		var threads = new Thread[workers.activeCount()];
 		workers.enumerate(threads);
 		for(var thread: threads) thread.setPriority(CONFIG.workerThreadPriority);
@@ -185,6 +185,14 @@ public class BadMap implements DedicatedServerModInitializer
 			final var end = System.currentTimeMillis();
 			LOGGER.info("found {} chunks in {} ms", chunks.size(), end - start);
 		}); */
+		
+		LOGGER.info("<loglevels>");
+		LOGGER.trace("trace");
+		LOGGER.debug("debug");
+		LOGGER.info("info");
+		LOGGER.warn("warn");
+		LOGGER.error("error");
+		LOGGER.info("</loglevels>");
 		
 		return 1;
 	}
