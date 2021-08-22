@@ -343,9 +343,7 @@ public class RenderJob
 	private static Vec3i getPixelOffset(RegionPos regionPos, ChunkPos chunkPos)
 	{
 		final var posInRegion = regionPos.chunkPosInRegion(chunkPos);
-		final var offsetX = 16 * (posInRegion.x < 0 ? (32 - Math.abs(posInRegion.x)) : posInRegion.x);
-		final var offsetZ = 16 * (posInRegion.z < 0 ? (32 - Math.abs(posInRegion.z)) : posInRegion.z);
-		return new Vec3i(offsetX, offsetZ, 0); // no vec2i -_-
+		return new Vec3i(16 * posInRegion.x, 16 * posInRegion.z, 0); // no vec2i -_-
 	}
 	
 	static record ChunkPair(Chunk main, @Nullable Chunk toNorth) {}
