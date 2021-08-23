@@ -3,9 +3,14 @@ package net.yoplitein.badmap;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.stream.Stream;
 
 import javax.imageio.ImageIO;
+
+import com.google.common.collect.Lists;
 
 import net.minecraft.block.MapColor;
 import net.minecraft.text.ClickEvent;
@@ -177,5 +182,53 @@ public class Utils
 		}
 		
 		return result;
+	}
+	
+	public static <T> CompletableFuture<Void> chainAsync(Stream<CompletableFuture<T>> tasks, int parallel)
+    {
+        final var done = new CompletableFuture<Void>();
+        final var empty = CompletableFuture.completedFuture(null);
+        final var iter = tasks.iterator();
+        
+        final var nextFutures = new CompletableFuture[parallel];
+        final var scheduleNext = new Cell<Runnable>(null);
+        scheduleNext.val = () -> {
+            try
+            {
+				// java has no cheap array slicing, so we use a bogus future for the remainder
+				Arrays.fill(nextFutures, empty);
+				
+                if(!iter.hasNext())
+                    done.complete(null);
+                else
+                {
+                    for(int i = 0; i < parallel; i++)
+                    {
+                        if(!iter.hasNext()) break;
+                        nextFutures[i] = iter.next();
+                    }
+                    
+                    final var next = CompletableFuture.allOf(nextFutures);
+                    next.thenRunAsync(scheduleNext.val, BadMap.THREADPOOL);
+                    next.exceptionallyAsync(err -> { done.completeExceptionally(err); return null; }, BadMap.THREADPOOL);
+                }
+            }
+            catch(Throwable err)
+            {
+				BadMap.LOGGER.error("chainAsync.scheduleNext caught exception", err);
+                done.completeExceptionally(err);
+				for(var task: nextFutures) task.completeExceptionally(err);
+            }
+        };
+        scheduleNext.val.run();
+        
+        return done;
+    }
+	
+	public static <T> List<List<T>> workerBatches(List<T> list)
+	{
+		final var numWorkers = BadMap.THREADPOOL.getCorePoolSize();
+		final var len = list.size();
+		return Lists.partition(list, len < numWorkers ? len : len / numWorkers);
 	}
 }

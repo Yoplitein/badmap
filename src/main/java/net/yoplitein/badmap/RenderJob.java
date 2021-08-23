@@ -7,6 +7,8 @@ import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 import org.jetbrains.annotations.Nullable;
@@ -24,10 +26,8 @@ import net.minecraft.util.math.Vec3i;
 import net.minecraft.world.ChunkSerializer;
 import net.minecraft.world.Heightmap;
 import net.minecraft.world.chunk.Chunk;
-import net.minecraft.world.chunk.ChunkStatus;
 import net.minecraft.world.chunk.ChunkStatus.ChunkType;
 import net.minecraft.world.chunk.ReadOnlyChunk;
-import net.minecraft.world.chunk.WorldChunk;
 import net.yoplitein.badmap.Utils.RegionPos;
 
 public class RenderJob
@@ -64,23 +64,37 @@ public class RenderJob
 			benchmark.end();
 			BadMap.LOGGER.debug("perf: grouped {} chunks into {} regions in {}ms", populated.size(), regions.size(), benchmark.msecs());
 			
-			final var numRegionsRendered = new Utils.Cell<Long>(0l); // how many regions actually had any rendering to do
+			final var numRegionsRendered = new AtomicInteger(0); // how many regions actually had any rendering to do
+			final var jobs = regions
+				.stream()
+				.map(set -> {
+					final var outFile = BadMap.CONFIG.tileDir.resolve(Utils.tileFilename(set.pos)).toFile();
+					BufferedImage prerendered = null;
+					if(incremental && outFile.exists()) prerendered = Utils.readPNG(outFile);
+					
+					return renderRegion(prerendered, outFile.lastModified(), set, incremental)
+						.thenAcceptAsync(img -> {
+							if(img != null)
+							{
+								Utils.writePNG(outFile, img);
+								numRegionsRendered.getAndIncrement();
+							}
+						}, BadMap.THREADPOOL)
+					;
+				})
+			;
+			
 			benchmark.start();
-			for(var set: regions) // FIXME: use futures to free up threadpool
-			{
-				final var outFile = BadMap.CONFIG.tileDir.resolve(Utils.tileFilename(set.pos)).toFile();
-				BufferedImage prerendered = null;
-				if(incremental && outFile.exists()) prerendered = Utils.readPNG(outFile);
-				
-				final var img = renderRegion(prerendered, outFile.lastModified(), set, incremental);
-				if(img != null)
-				{
-					Utils.writePNG(outFile, img);
-					numRegionsRendered.val++;
-				}
-			}
-			benchmark.end();
-			BadMap.LOGGER.debug("perf: rendered {} (out of {}) regions in {}ms", numRegionsRendered.val, regions.size(), benchmark.msecs());
+			final var future = Utils.chainAsync(jobs, BadMap.CONFIG.maxParallelRegions);
+			future.exceptionallyAsync(err -> {
+				BadMap.LOGGER.error("Main render future completed exceptionally", err);
+				return null;
+			}, BadMap.THREADPOOL);
+			future.thenRunAsync(() -> {
+				benchmark.end();
+				BadMap.LOGGER.debug("perf: rendered {} (out of {}) regions in {}ms", numRegionsRendered.get(), regions.size(), benchmark.msecs());
+				BadMap.LOGGER.info("Render complete");
+			}, BadMap.THREADPOOL);
 		});
 	}
 	
@@ -164,7 +178,7 @@ public class RenderJob
 		;
 	}
 	
-	private @Nullable BufferedImage renderRegion(@Nullable BufferedImage prerendered, long imageMtime, RegionSet set, boolean incremental)
+	private CompletableFuture<@Nullable BufferedImage> renderRegion(@Nullable BufferedImage prerendered, long imageMtime, RegionSet set, boolean incremental)
 	{
 		final var benchmark = new Utils.Benchmark();
 		final var regionPos = set.pos;
@@ -179,61 +193,97 @@ public class RenderJob
 			if(sizeNow > 0 && sizeNow != sizeBefore)
 				BadMap.LOGGER.debug("reusing renders for {} (out of {}) up to date chunks", sizeBefore - sizeNow, sizeBefore);
 			
-			if(sizeNow == 0) return null;
+			if(sizeNow == 0) return CompletableFuture.completedFuture(null);
 		}
+		final var imgFuture = new CompletableFuture<BufferedImage>();
 		
+		final var allChunksFuture = parseChunks(set);
 		benchmark.start();
-		final var allChunks = parseChunks(set);
-		benchmark.end();
-		BadMap.LOGGER.debug("perf: parsed {} chunks in {}ms", allChunks.size(), benchmark.msecs());
+		allChunksFuture.exceptionallyAsync(err -> {
+			BadMap.LOGGER.trace("allChunksFuture exception", err);
+			imgFuture.completeExceptionally(err);
+			return null;
+		}, BadMap.THREADPOOL);
+		allChunksFuture.thenAcceptAsync(allChunks -> {
+			benchmark.end();
+			BadMap.LOGGER.debug("perf: parsed {} chunks in {}ms", allChunks.size(), benchmark.msecs());
+			
+			final var chunks = allChunks
+				.entrySet()
+				.stream()
+				.map(pair -> {
+					final var pos = pair.getKey();
+					final var north = new ChunkPos(pos.x, pos.z - 1);
+					return new ChunkPair(pair.getValue(), allChunks.getOrDefault(north, null));
+				})
+				.collect(Collectors.toList())
+			;
+			benchmark.end();
+			
+			final var img = prerendered != null ? prerendered : new BufferedImage(512, 512, BufferedImage.TYPE_4BYTE_ABGR);
+			final var tasks = Utils.workerBatches(chunks)
+				.stream()
+				.map(batch -> CompletableFuture.runAsync(
+					() -> batch.forEach(pair -> renderChunk(img, regionPos, pair.main, pair.toNorth)),
+					BadMap.THREADPOOL
+				))
+				.toArray(CompletableFuture[]::new)
+			;
+			
+			final var chunksFuture = CompletableFuture.allOf(tasks);
+			
+			benchmark.start();
+			chunksFuture.exceptionallyAsync(err -> {
+				BadMap.LOGGER.trace("chunksFuture exception", err);
+				imgFuture.completeExceptionally(err);
+				return null;
+			}, BadMap.THREADPOOL);
+			chunksFuture.thenRunAsync(() -> {
+				benchmark.end();
+				BadMap.LOGGER.debug("perf: rendered region ({} chunks) in {}ms", chunks.size(), benchmark.msecs());
+				imgFuture.complete(img);
+			}, BadMap.THREADPOOL);
+		}, BadMap.THREADPOOL);
 		
-		final var chunks = allChunks
-			.entrySet()
-			.stream()
-			.collect(Collectors.toMap(pair -> pair.getKey(), pair -> {
-				final var pos = pair.getKey();
-				final var north = new ChunkPos(pos.x, pos.z - 1);
-				return new ChunkPair(pair.getValue(), allChunks.getOrDefault(north, null));
-			}))
-		;
-		
-		final var img = prerendered != null ? prerendered : new BufferedImage(512, 512, BufferedImage.TYPE_4BYTE_ABGR);
-		
-		benchmark.start();
-		chunks.values().forEach(pair -> renderChunk(img, regionPos, pair.main, pair.toNorth));
-		benchmark.end();
-		BadMap.LOGGER.debug("perf: rendered region ({} chunks) in {}ms", chunks.size(), benchmark.msecs());
-		
-		return img;
+		return imgFuture;
 	}
 	
-	private Map<ChunkPos, Chunk> parseChunks(RegionSet set)
+	private CompletableFuture<Map<ChunkPos, Chunk>> parseChunks(RegionSet set)
 	{
-		final var result = new HashMap<ChunkPos, Chunk>(set.populatedChunks.size(), 1f);
-		final var alreadyLoaded = server.submit(() ->
-			set
-				.populatedChunks
-				.stream()
-				.map(info -> (WorldChunk)world.getChunk(info.pos.x, info.pos.z, ChunkStatus.FULL, false))
-				.filter(chunk -> chunk != null)
-		).join();
-		
-		alreadyLoaded.forEach(chunk -> result.put(chunk.getPos(), chunk));
-		
 		final var structureManager = world.getStructureManager();
-		final var poiStorage = world.getPointOfInterestStorage();
+		final var poiStorage = POIStorageFaker.getInstance();
 		
-		// TODO: this can be done in parallel, probably
-		for(var info: set.populatedChunks)
-		{
-			final var pos = info.pos;
-			if(result.containsKey(pos)) continue;
-			
-			final var chunk = (ReadOnlyChunk)ChunkSerializer.deserialize(world, structureManager, poiStorage, pos, info.nbt);
-			result.put(pos, chunk.getWrappedChunk());
-		}
+		// FIXME: can we efficiently reimplement fetching preloaded chunks?
 		
-		return result;
+		final var batches = Utils.workerBatches(set.populatedChunks)
+			.stream()
+			.map(batch -> CompletableFuture.supplyAsync(() -> {
+				final var submap = new HashMap<ChunkPos, Chunk>(batch.size(), 1f);
+				for(var info: batch)
+				{
+					final var chunk = (ReadOnlyChunk)ChunkSerializer.deserialize(world, structureManager, poiStorage, info.pos, info.nbt);
+					submap.put(info.pos, chunk.getWrappedChunk());
+				}
+				return submap;
+			}, BadMap.THREADPOOL))
+			.collect(Collectors.toList())
+		;
+		
+		final var mapFuture = new CompletableFuture<Map<ChunkPos, Chunk>>();
+		final var batchesFuture = CompletableFuture.allOf(batches.toArray(CompletableFuture[]::new)); // storing as array directly causes fun of non-reified-generics flavour
+		batchesFuture.exceptionallyAsync(err -> {
+			BadMap.LOGGER.trace("batchesFuture exception", err);
+			mapFuture.completeExceptionally(err); return null;
+		}, BadMap.THREADPOOL);
+		batchesFuture.thenRunAsync(
+			() -> {
+				final var combined = new HashMap<ChunkPos, Chunk>(set.populatedChunks.size(), 1f);
+				for(var job: batches) combined.putAll(job.getNow(null));
+				mapFuture.complete(combined);
+			},
+			BadMap.THREADPOOL
+		);
+		return mapFuture;
 	}
 	
 	private void renderChunk(BufferedImage regionImage, RegionPos regionPos, Chunk chunk, @Nullable Chunk toNorth)
